@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "thithi-3e545"
+  },
+  "targets": {
+    "thithi-3e545": {
+      "hosting": {
+        "thithi-ai": [
+          "thithi-3e545"
+        ]
+      }
+    }
+  }
+}
+
