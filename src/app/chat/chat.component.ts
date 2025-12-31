@@ -64,30 +64,44 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
       this.recognition.onstart = () => {
         this.isRecording = true;
         // Store the current message as base before starting recording
-        this.baseMessage = this.currentMessage;
+        this.baseMessage = this.currentMessage || '';
+        // Đảm bảo textarea hiển thị ngay khi bắt đầu
+        this.adjustTextareaHeight();
       };
 
       this.recognition.onresult = (event: any) => {
         let interimTranscript = '';
         let finalTranscript = '';
 
+        // Xử lý tất cả kết quả từ resultIndex đến cuối
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
+            // Kết quả cuối cùng - thêm vào baseMessage
             finalTranscript += transcript + ' ';
           } else {
+            // Kết quả tạm thời - hiển thị ngay
             interimTranscript += transcript;
           }
         }
 
+        // Nếu có final transcript, cập nhật baseMessage
         if (finalTranscript) {
-          // Update base message with final transcript
           this.baseMessage = (this.baseMessage + finalTranscript).trim();
+        }
+        
+        // Luôn cập nhật currentMessage để hiển thị
+        if (interimTranscript) {
+          // Có interim - hiển thị base + interim
+          this.currentMessage = (this.baseMessage + ' ' + interimTranscript).trim();
+        } else if (finalTranscript) {
+          // Chỉ có final - hiển thị base (đã bao gồm final)
           this.currentMessage = this.baseMessage;
+        }
+        
+        // Luôn gọi adjustTextareaHeight để đảm bảo UI cập nhật
+        if (finalTranscript || interimTranscript) {
           this.adjustTextareaHeight();
-        } else if (interimTranscript) {
-          // Show base message + interim results
-          this.currentMessage = this.baseMessage + interimTranscript;
         }
       };
 
@@ -116,9 +130,25 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
       this.recognition.onend = () => {
         this.isRecording = false;
-        // Ensure final message is set correctly
-        this.currentMessage = this.baseMessage;
+        
+        // Đảm bảo text cuối cùng được hiển thị
+        // Nếu baseMessage rỗng nhưng có currentMessage, dùng currentMessage
+        if (!this.baseMessage && this.currentMessage) {
+          this.baseMessage = this.currentMessage;
+        }
+        
+        // Đảm bảo currentMessage được set đúng
+        this.currentMessage = this.baseMessage || this.currentMessage;
         this.adjustTextareaHeight();
+        
+        // Tự động gửi tin nhắn nếu có nội dung sau khi dừng ghi âm
+        const messageToSend = this.currentMessage?.trim() || this.baseMessage?.trim();
+        if (messageToSend && !this.isLoading) {
+          // Đợi một chút để đảm bảo UI đã cập nhật và người dùng thấy được text
+          setTimeout(() => {
+            this.sendMessage();
+          }, 500);
+        }
       };
     } else {
       this.isSpeechSupported = false;

@@ -213,8 +213,36 @@ exports.chatFunction = onRequest(
             }
             
             if (selectedModel) {
-              // Tạo prompt với yêu cầu trả lời bằng tiếng Việt
-              const systemPrompt = "Bạn là một trợ lý AI thông minh và hữu ích. Hãy luôn trả lời bằng tiếng Việt một cách tự nhiên, dễ hiểu và thân thiện. Nếu người dùng hỏi bằng tiếng Việt, hãy trả lời bằng tiếng Việt. Nếu người dùng hỏi bằng ngôn ngữ khác, bạn có thể trả lời bằng ngôn ngữ đó hoặc tiếng Việt tùy theo ngữ cảnh.\n\n";
+              // Lấy thông tin ngày giờ hiện tại
+              const now = new Date();
+              const vietnamTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Ho_Chi_Minh"}));
+              const day = vietnamTime.getDate();
+              const month = vietnamTime.getMonth() + 1; // getMonth() trả về 0-11
+              const year = vietnamTime.getFullYear();
+              const hours = vietnamTime.getHours();
+              const minutes = vietnamTime.getMinutes();
+              
+              // Tên tháng bằng tiếng Việt
+              const monthNames = ["tháng 1", "tháng 2", "tháng 3", "tháng 4", "tháng 5", "tháng 6",
+                                "tháng 7", "tháng 8", "tháng 9", "tháng 10", "tháng 11", "tháng 12"];
+              const dayNames = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
+              const dayOfWeek = dayNames[vietnamTime.getDay()];
+              const monthName = monthNames[month - 1];
+              
+              const currentDateStr = `${day} ${monthName} năm ${year}`;
+              const currentTimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+              const currentDateTimeStr = `${dayOfWeek}, ngày ${day} ${monthName} năm ${year}, lúc ${currentTimeStr}`;
+              
+              // Tạo prompt với yêu cầu trả lời bằng tiếng Việt và thông tin ngày hiện tại
+              const systemPrompt = `Bạn là một trợ lý AI thông minh và hữu ích. Hãy luôn trả lời bằng tiếng Việt một cách tự nhiên, dễ hiểu và thân thiện. Nếu người dùng hỏi bằng tiếng Việt, hãy trả lời bằng tiếng Việt. Nếu người dùng hỏi bằng ngôn ngữ khác, bạn có thể trả lời bằng ngôn ngữ đó hoặc tiếng Việt tùy theo ngữ cảnh.
+
+⚠️ QUAN TRỌNG VỀ THỜI GIAN:
+- Ngày giờ hiện tại (theo múi giờ Việt Nam): ${currentDateTimeStr}
+- Khi người dùng hỏi về "hôm nay", "ngày hôm nay", "hôm nay là ngày mấy", hoặc các câu hỏi tương tự về ngày hiện tại, bạn PHẢI sử dụng thông tin ngày giờ hiện tại ở trên.
+- KHÔNG được sử dụng thông tin ngày từ training data hoặc dữ liệu cũ.
+- Luôn trả lời chính xác về ngày hiện tại dựa trên thông tin được cung cấp ở trên.
+
+`;
               
               // Sử dụng v1beta cho các model mới (2.0+, 1.5-flash), v1 cho các model cũ
               // gemini-1.5-flash thường cần v1beta
