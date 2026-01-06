@@ -8,6 +8,7 @@ import { environment } from '../../environments/environment';
 
 export interface ChatRequest {
   question: string;
+  microsoftAccessToken?: string; // Optional Microsoft access token for Outlook integration
 }
 
 export interface ChatResponse {
@@ -92,7 +93,7 @@ export class ChatService {
   /**
    * Send message to Firebase Function
    */
-  sendMessage(question: string): Observable<ChatResponse> {
+  sendMessage(question: string, microsoftAccessToken?: string): Observable<ChatResponse> {
     // Check if API URL is configured
     if (!this.apiUrl || this.apiUrl.trim() === '') {
       console.error('ChatService: API URL is not configured');
@@ -101,13 +102,22 @@ export class ChatService {
 
     console.log('ChatService: Sending message to', this.apiUrl);
     console.log('ChatService: Question:', question);
+    if (microsoftAccessToken) {
+      console.log('ChatService: Microsoft token provided for Outlook integration');
+    }
 
     // Don't wait for auth token - function doesn't require authentication
     const headers = new HttpHeaders({
       'Content-Type': 'application/json'
     });
 
-    const body: ChatRequest = { question };
+    const body: ChatRequest = { 
+      question,
+      ...(microsoftAccessToken && { microsoftAccessToken })
+    };
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.service.ts:114',message:'Preparing request body',data:{hasToken:!!microsoftAccessToken,tokenLength:microsoftAccessToken?.length||0,questionLength:question.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
 
     return this.http.post<ChatResponse>(this.apiUrl, body, { headers }).pipe(
       catchError((error) => {

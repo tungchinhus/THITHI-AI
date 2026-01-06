@@ -15,6 +15,11 @@ export const environment = {
   // Xem file HUONG_DAN_CAU_HINH_FUNCTION.md để biết chi tiết
   firebaseFunctionUrl: "https://chatfunction-7wmcfqhioa-uc.a.run.app", // Firebase Function v2 URL
   // Gemini API Key - Lấy từ https://makersuite.google.com/app/apikey
-  geminiApiKey: "" // Thêm API key của bạn vào đây
+  geminiApiKey: "", // Thêm API key của bạn vào đây
+  
+  // Microsoft Outlook Integration
+  // Lấy từ Azure AD App Registration: https://portal.azure.com
+  microsoftClientId: "4e8cf90e-655d-4795-9e6d-4bd4353616f3", // Application (client) ID
+  microsoftTenantId: "1c94e0b1-63e3-405f-a00a-54f8138b0811" // Directory (tenant) ID
 };
 
