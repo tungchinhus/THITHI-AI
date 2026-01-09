@@ -79,41 +79,8 @@ ${context}
 
   // Tạo phần lịch sử chat
   let historySection = '';
-  // #region agent log
-  const debugLogHistory = {
-    location: 'index.js:80',
-    message: 'Building history section',
-    data: {
-      hasHistory: !!history,
-      historyIsArray: Array.isArray(history),
-      historyLength: history?.length || 0,
-      historyType: typeof history
-    },
-    timestamp: Date.now(),
-    sessionId: 'debug-session',
-    runId: 'run1',
-    hypothesisId: 'D'
-  };
-  fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(debugLogHistory)
-  }).catch(() => {});
-  // #endregion
   
   if (history && Array.isArray(history) && history.length > 0) {
-    // #region agent log - Log full history content
-    console.log('🔍 [DEBUG] Full history content before formatting:', JSON.stringify({
-      historyLength: history.length,
-      fullHistory: history.map((msg, idx) => ({
-        index: idx,
-        role: msg.role,
-        content: msg.content,
-        contentLength: msg.content?.length || 0
-      }))
-    }, null, 2));
-    // #endregion
-    
     const historyText = history.map((msg, index) => {
       const role = msg.role === 'user' ? 'Người dùng' : 'Trợ lý AI';
       return `${index + 1}. [${role}]: ${msg.content || ''}`;
@@ -134,59 +101,11 @@ ${historyText}
 - Khi user hỏi "Tôi tên gì?" hoặc "What is my name?", hãy tìm trong LỊCH SỬ CHAT ở trên để tìm câu trả lời.
 - Ví dụ: Nếu trong lịch sử có "Tên tôi là CHINH", thì khi user hỏi "Tôi tên gì?", bạn PHẢI trả lời "Tên bạn là CHINH" (KHÔNG được nói "Tôi không biết").
 `;
-    
-    // #region agent log - Log formatted history section
-    console.log('🔍 [DEBUG] Formatted history section:', {
-      historyTextLength: historyText.length,
-      historySectionLength: historySection.length,
-      historyTextPreview: historyText.substring(0, 500),
-      containsNameInfo: historyText.toLowerCase().includes('tên') || historyText.toLowerCase().includes('name'),
-      fullHistoryText: historyText
-    });
-    // #endregion
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        location: 'index.js:100',
-        message: 'History section built',
-        data: {
-          historyTextLength: historyText.length,
-          historySectionLength: historySection.length,
-          messagesCount: history.length
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'run1',
-        hypothesisId: 'D'
-      })
-    }).catch(() => {});
-    // #endregion
   } else {
     historySection = `
 ### 3. LỊCH SỬ CHAT (Để hiểu ngữ cảnh)
 - Không có lịch sử chat trước đó
 `;
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        location: 'index.js:110',
-        message: 'No history - empty section',
-        data: {
-          hasHistory: !!history,
-          historyIsArray: Array.isArray(history),
-          historyLength: history?.length || 0
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'run1',
-        hypothesisId: 'D'
-      })
-    }).catch(() => {});
-    // #endregion
   }
 
   // Tạo prompt đầy đủ
@@ -339,22 +258,6 @@ exports.chatFunction = onRequest(
 
       // Get question, Microsoft access token, chat history, and user info from request body
       const {question, microsoftAccessToken, chatHistory, userInfo} = req.body;
-      // #region agent log
-      console.log('🔍 [DEBUG] Backend received request:', {
-        question: question?.substring(0, 50),
-        hasToken: !!microsoftAccessToken,
-        hasChatHistory: !!chatHistory,
-        chatHistoryLength: chatHistory?.length || 0,
-        chatHistoryType: Array.isArray(chatHistory) ? 'array' : typeof chatHistory,
-        chatHistoryPreview: chatHistory && Array.isArray(chatHistory) && chatHistory.length > 0 
-          ? chatHistory.slice(0, 2).map(m => ({ role: m.role, content: m.content?.substring(0, 30) }))
-          : null,
-        fullChatHistory: chatHistory && Array.isArray(chatHistory) 
-          ? chatHistory.map((msg, idx) => ({ index: idx, role: msg.role, content: msg.content }))
-          : null,
-        hasUserInfo: !!userInfo
-      });
-      // #endregion
 
       // Validate question
       if (!question || typeof question !== "string" || question.trim() === "") {
@@ -673,19 +576,6 @@ exports.chatFunction = onRequest(
                 ? chatHistory.slice(-20)
                 : [];
               
-              // #region agent log
-              console.log('🔍 [DEBUG] History preparation for prompt:', {
-                chatHistoryProvided: !!chatHistory,
-                chatHistoryIsArray: Array.isArray(chatHistory),
-                chatHistoryLength: chatHistory?.length || 0,
-                recentHistoryLength: recentHistory.length,
-                recentHistoryPreview: recentHistory.length > 0 
-                  ? recentHistory.slice(0, 2).map(m => ({ role: m.role, content: m.content?.substring(0, 30) }))
-                  : null,
-                fullRecentHistory: recentHistory.map((msg, idx) => ({ index: idx, role: msg.role, content: msg.content }))
-              });
-              // #endregion
-              
               if (recentHistory.length > 0) {
                 console.log(`✅ Preparing chat history for prompt: ${recentHistory.length} messages`);
               } else {
@@ -714,25 +604,9 @@ exports.chatFunction = onRequest(
               // Sử dụng hàm buildPrompt để tạo prompt
               const systemPrompt = buildPrompt(userDoc, recentHistory, combinedContext, userQuery, currentDateTimeStr);
               
-              // #region agent log
-              const historySectionMatch = systemPrompt.match(/### 3\. LỊCH SỬ CHAT[\s\S]*?(?=### 4\.|$)/);
-              const historySectionText = historySectionMatch ? historySectionMatch[0] : '';
-              console.log('🔍 [DEBUG] Prompt built - checking history inclusion:', {
-                promptLength: systemPrompt.length,
-                hasHistoryInPrompt: systemPrompt.includes('LỊCH SỬ CHAT'),
-                historySectionLength: historySectionText.length,
-                recentHistoryCount: recentHistory.length,
-                promptPreview: systemPrompt.substring(0, 500),
-                fullHistorySection: historySectionText.substring(0, 1000),
-                containsNameInfo: historySectionText.toLowerCase().includes('tên') || historySectionText.toLowerCase().includes('chinh')
-              });
-              // #endregion
-              
               console.log('✅ Prompt built using buildPrompt function');
               if (recentHistory.length > 0) {
                 console.log(`   - History included: ${recentHistory.length} messages`);
-                console.log(`   - History section length: ${historySectionText.length} chars`);
-                console.log(`   - History section preview: ${historySectionText.substring(0, 300)}`);
               }
               
               // Sử dụng v1beta cho các model mới (2.0+, 1.5-flash), v1 cho các model cũ
