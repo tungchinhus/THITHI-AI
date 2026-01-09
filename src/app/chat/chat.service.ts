@@ -6,9 +6,23 @@ import { Auth, onAuthStateChanged } from 'firebase/auth';
 import { getFirebaseAuth } from '../firebase.config';
 import { environment } from '../../environments/environment';
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: string;
+}
+
+export interface UserInfo {
+  displayName?: string;
+  email?: string;
+  role?: string; // 'manager' | 'employee' | 'new_employee'
+}
+
 export interface ChatRequest {
   question: string;
   microsoftAccessToken?: string; // Optional Microsoft access token for Outlook integration
+  chatHistory?: ChatMessage[]; // Lịch sử chat để AI nhớ context
+  userInfo?: UserInfo; // Thông tin người dùng để cá nhân hóa
 }
 
 export interface ChatResponse {
@@ -17,6 +31,8 @@ export interface ChatResponse {
   message?: string;
   sources?: string[];
   citations?: string[];
+  analysis?: string;
+  suggestions?: string[];
 }
 
 @Injectable({
@@ -93,7 +109,12 @@ export class ChatService {
   /**
    * Send message to Firebase Function
    */
-  sendMessage(question: string, microsoftAccessToken?: string): Observable<ChatResponse> {
+  sendMessage(
+    question: string, 
+    microsoftAccessToken?: string,
+    chatHistory?: ChatMessage[],
+    userInfo?: UserInfo
+  ): Observable<ChatResponse> {
     // Check if API URL is configured
     if (!this.apiUrl || this.apiUrl.trim() === '') {
       console.error('ChatService: API URL is not configured');
@@ -105,6 +126,12 @@ export class ChatService {
     if (microsoftAccessToken) {
       console.log('ChatService: Microsoft token provided for Outlook integration');
     }
+    if (chatHistory && chatHistory.length > 0) {
+      console.log('ChatService: Sending chat history:', chatHistory.length, 'messages');
+    }
+    if (userInfo) {
+      console.log('ChatService: User info:', userInfo);
+    }
 
     // Don't wait for auth token - function doesn't require authentication
     const headers = new HttpHeaders({
@@ -113,10 +140,13 @@ export class ChatService {
 
     const body: ChatRequest = { 
       question,
-      ...(microsoftAccessToken && { microsoftAccessToken })
+      ...(microsoftAccessToken && { microsoftAccessToken }),
+      ...(chatHistory && chatHistory.length > 0 && { chatHistory }),
+      ...(userInfo && { userInfo })
     };
+
     // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.service.ts:114',message:'Preparing request body',data:{hasToken:!!microsoftAccessToken,tokenLength:microsoftAccessToken?.length||0,questionLength:question.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.service.ts:116',message:'Request body before send',data:{hasChatHistory:!!body.chatHistory,chatHistoryLength:body.chatHistory?.length||0,hasUserInfo:!!body.userInfo,questionLength:question.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
     // #endregion
 
     return this.http.post<ChatResponse>(this.apiUrl, body, { headers }).pipe(

@@ -22,6 +22,314 @@ const FORCE_FREE_MODEL = true; // true = luôn dùng model miễn phí, false = 
 const FORCED_FREE_MODEL = 'gemini-1.5-flash'; // Model miễn phí với quota cao nhất
 
 /**
+ * Hàm tạo Prompt gửi Gemini
+ * @param {Object} userDoc - Thông tin người dùng (displayName, jobTitle, department, notes)
+ * @param {Array} history - Lịch sử chat (array of {role, content})
+ * @param {string} context - Context từ tài liệu (email, OneDrive, etc.)
+ * @param {string} userQuery - Câu hỏi mới của user
+ * @param {string} currentDateTimeStr - Ngày giờ hiện tại
+ * @returns {string} Prompt đầy đủ để gửi Gemini
+ */
+function buildPrompt(userDoc, history, context, userQuery, currentDateTimeStr) {
+  // #region agent log
+  const debugLogBuildPrompt = {
+    location: 'index.js:33',
+    message: 'buildPrompt ENTRY',
+    data: {
+      hasUserDoc: !!userDoc,
+      hasHistory: !!history,
+      historyIsArray: Array.isArray(history),
+      historyLength: history?.length || 0,
+      historyPreview: history && Array.isArray(history) && history.length > 0
+        ? history.slice(0, 2).map(m => ({ role: m.role, content: m.content?.substring(0, 30) }))
+        : null,
+      hasContext: !!context,
+      contextLength: context?.length || 0,
+      userQueryLength: userQuery?.length || 0
+    },
+    timestamp: Date.now(),
+    sessionId: 'debug-session',
+    runId: 'run1',
+    hypothesisId: 'D'
+  };
+  fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(debugLogBuildPrompt)
+  }).catch(() => {});
+  // #endregion
+  
+  // Tạo phần thông tin người dùng
+  let userInfoSection = '';
+  if (userDoc) {
+    const userRoleText = userDoc.role === 'manager' 
+      ? 'Sếp/Quản lý' 
+      : userDoc.role === 'new_employee' 
+      ? 'Nhân viên mới' 
+      : 'Nhân viên';
+    
+    userInfoSection = `
+### 1. THÔNG TIN NGƯỜI DÙNG (Để nhớ sâu & Cá nhân hóa)
+- Tên: ${userDoc.displayName || 'Không có'}
+- Email: ${userDoc.email || 'Không có'}
+- Chức vụ: ${userDoc.jobTitle || userRoleText}
+- Phòng ban: ${userDoc.department || 'Chưa rõ'}
+- Vai trò: ${userRoleText}
+- Ghi chú về sở thích: ${userDoc.notes || 'Thích câu trả lời rõ ràng, đầy đủ'}
+
+⚠️ ÁP DỤNG NGUYÊN TẮC "NHỚ SÂU (CÁ NHÂN HÓA)":
+${userDoc.role === 'manager' 
+  ? '- Nếu là Sếp/Quản lý: Trả lời súc tích, tập trung vào kết quả, chi phí, hiệu quả.'
+  : userDoc.role === 'new_employee'
+  ? '- Nếu là Nhân viên mới: Giải thích chi tiết, tận tình từng bước, dễ hiểu.'
+  : '- Nếu là Nhân viên: Trả lời rõ ràng, đầy đủ thông tin cần thiết.'}
+`;
+  } else {
+    userInfoSection = `
+### 1. THÔNG TIN NGƯỜI DÙNG (Để nhớ sâu & Cá nhân hóa)
+- Không có thông tin người dùng
+`;
+  }
+
+  // Tạo phần context
+  let contextSection = '';
+  if (context && context.trim()) {
+    contextSection = `
+### 2. CONTEXT (Tài liệu tham khảo từ OneDrive/Email/Database)
+${context}
+`;
+  } else {
+    contextSection = `
+### 2. CONTEXT (Tài liệu tham khảo)
+- Không có tài liệu tham khảo
+`;
+  }
+
+  // Tạo phần lịch sử chat
+  let historySection = '';
+  // #region agent log
+  const debugLogHistory = {
+    location: 'index.js:80',
+    message: 'Building history section',
+    data: {
+      hasHistory: !!history,
+      historyIsArray: Array.isArray(history),
+      historyLength: history?.length || 0,
+      historyType: typeof history
+    },
+    timestamp: Date.now(),
+    sessionId: 'debug-session',
+    runId: 'run1',
+    hypothesisId: 'D'
+  };
+  fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(debugLogHistory)
+  }).catch(() => {});
+  // #endregion
+  
+  if (history && Array.isArray(history) && history.length > 0) {
+    // #region agent log - Log full history content
+    console.log('🔍 [DEBUG] Full history content before formatting:', JSON.stringify({
+      historyLength: history.length,
+      fullHistory: history.map((msg, idx) => ({
+        index: idx,
+        role: msg.role,
+        content: msg.content,
+        contentLength: msg.content?.length || 0
+      }))
+    }, null, 2));
+    // #endregion
+    
+    const historyText = history.map((msg, index) => {
+      const role = msg.role === 'user' ? 'Người dùng' : 'Trợ lý AI';
+      return `${index + 1}. [${role}]: ${msg.content || ''}`;
+    }).join('\n');
+    
+    historySection = `
+### 3. LỊCH SỬ CHAT (Để hiểu ngữ cảnh "cái đó", "file vừa rồi", "nó")
+${historyText}
+
+⚠️⚠️⚠️ ÁP DỤNG NGUYÊN TẮC "HIỂU NGỮ CẢNH" - QUAN TRỌNG:
+- Nếu user hỏi "nó", "cái đó", "như vậy", "điều đó", "tôi", "bạn", hoặc các đại từ khác, hãy nhìn LỊCH SỬ CHAT ở trên để biết đang nói cái gì.
+- Nếu người dùng đã nói về bất kỳ thông tin gì (tên, sở thích, yêu cầu, v.v.) trong lịch sử chat, bạn PHẢI nhớ và sử dụng thông tin đó khi trả lời.
+- Luôn tham khảo lịch sử chat để trả lời chính xác và có ngữ cảnh. Đừng hỏi lại thông tin đã được cung cấp trước đó.
+
+🚨🚨🚨 QUAN TRỌNG ĐẶC BIỆT VỀ TÊN NGƯỜI DÙNG:
+- Nếu trong lịch sử chat có thông tin về tên người dùng (ví dụ: "Tên tôi là X", "Tôi là Y", "My name is Z"), bạn PHẢI NHỚ và SỬ DỤNG tên đó trong các câu trả lời tiếp theo.
+- KHÔNG được hỏi lại tên nếu đã được cung cấp trong lịch sử chat.
+- Khi user hỏi "Tôi tên gì?" hoặc "What is my name?", hãy tìm trong LỊCH SỬ CHAT ở trên để tìm câu trả lời.
+- Ví dụ: Nếu trong lịch sử có "Tên tôi là CHINH", thì khi user hỏi "Tôi tên gì?", bạn PHẢI trả lời "Tên bạn là CHINH" (KHÔNG được nói "Tôi không biết").
+`;
+    
+    // #region agent log - Log formatted history section
+    console.log('🔍 [DEBUG] Formatted history section:', {
+      historyTextLength: historyText.length,
+      historySectionLength: historySection.length,
+      historyTextPreview: historyText.substring(0, 500),
+      containsNameInfo: historyText.toLowerCase().includes('tên') || historyText.toLowerCase().includes('name'),
+      fullHistoryText: historyText
+    });
+    // #endregion
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        location: 'index.js:100',
+        message: 'History section built',
+        data: {
+          historyTextLength: historyText.length,
+          historySectionLength: historySection.length,
+          messagesCount: history.length
+        },
+        timestamp: Date.now(),
+        sessionId: 'debug-session',
+        runId: 'run1',
+        hypothesisId: 'D'
+      })
+    }).catch(() => {});
+    // #endregion
+  } else {
+    historySection = `
+### 3. LỊCH SỬ CHAT (Để hiểu ngữ cảnh)
+- Không có lịch sử chat trước đó
+`;
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        location: 'index.js:110',
+        message: 'No history - empty section',
+        data: {
+          hasHistory: !!history,
+          historyIsArray: Array.isArray(history),
+          historyLength: history?.length || 0
+        },
+        timestamp: Date.now(),
+        sessionId: 'debug-session',
+        runId: 'run1',
+        hypothesisId: 'D'
+      })
+    }).catch(() => {});
+    // #endregion
+  }
+
+  // Tạo prompt đầy đủ
+  const fullPrompt = `${SYSTEM_INSTRUCTION}
+
+⚠️ QUAN TRỌNG VỀ THỜI GIAN:
+- Ngày giờ hiện tại (theo múi giờ Việt Nam): ${currentDateTimeStr}
+- Khi người dùng hỏi về "hôm nay", "ngày hôm nay", "hôm nay là ngày mấy", hoặc các câu hỏi tương tự về ngày hiện tại, bạn PHẢI sử dụng thông tin ngày giờ hiện tại ở trên.
+- KHÔNG được sử dụng thông tin ngày từ training data hoặc dữ liệu cũ.
+
+--- DỮ LIỆU ĐẦU VÀO CHO PHIÊN LÀM VIỆC ---
+${userInfoSection}
+${contextSection}
+${historySection}
+
+### 4. CÂU HỎI MỚI CỦA USER
+"${userQuery}"
+
+--- YÊU CẦU ---
+Hãy xử lý và trả về JSON theo đúng định dạng đã quy định trong System Instruction.
+
+⚠️⚠️⚠️ QUAN TRỌNG VỀ ĐỊNH DẠNG JSON:
+Bạn PHẢI trả về MỘT JSON object duy nhất với cấu trúc chính xác như sau (KHÔNG có text nào khác trước/sau JSON):
+
+{
+  "analysis": "Phân tích ngắn gọn ý định người dùng và ngữ cảnh (ví dụ: User là Kế toán trưởng, cần thông tin chính xác về định mức. 'SG' là TP. Hồ Chí Minh.)",
+  "answer": "Câu trả lời chi tiết cho người dùng (Sử dụng Markdown: **in đậm**, list, table...). Ví dụ: Đối với cấp quản lý, hạn mức công tác phí tại **TP. Hồ Chí Minh** hiện tại là **2.500.000 VNĐ/ngày**.",
+  "citations": ["Tên file 1", "Tên file 2"],
+  "suggestions": [
+    "Gợi ý hành động 1 (ngắn gọn dưới 10 từ)",
+    "Gợi ý hành động 2",
+    "Gợi ý hành động 3"
+  ]
+}
+
+VÍ DỤ JSON ĐÚNG:
+{
+  "analysis": "User là Kế toán trưởng, cần thông tin chính xác về định mức. 'SG' là TP. Hồ Chí Minh.",
+  "answer": "Đối với cấp quản lý, hạn mức công tác phí tại **TP. Hồ Chí Minh** hiện tại là **2.500.000 VNĐ/ngày** (bao gồm phòng nghỉ và phụ cấp lưu trú).\\n\\nChi tiết xem tại bảng 3.1 quy định tài chính.",
+  "citations": ["Quy_dinh_cong_tac_phi_2024.pdf"],
+  "suggestions": [
+    "Xem chi tiết bảng định mức các tỉnh khác",
+    "Tải mẫu tờ trình công tác phí",
+    "Quy định về vé máy bay hạng thương gia"
+  ]
+}
+
+⚠️ LƯU Ý:
+- Field "analysis" phải phân tích ngắn gọn về user role và ngữ cảnh câu hỏi
+- Field "answer" phải sử dụng Markdown (**, \\n, list, table)
+- Field "citations" phải là array (có thể rỗng [] nếu không có tài liệu)
+- Field "suggestions" phải là array với 1-3 gợi ý, mỗi gợi ý ngắn gọn dưới 10 từ
+- KHÔNG được trả về text thường, CHỈ trả về JSON object
+`;
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      location: 'index.js:160',
+      message: 'buildPrompt EXIT',
+      data: {
+        promptLength: fullPrompt.length,
+        hasHistorySection: fullPrompt.includes('LỊCH SỬ CHAT'),
+        historySectionIndex: fullPrompt.indexOf('### 3. LỊCH SỬ CHAT'),
+        historySectionLength: fullPrompt.match(/### 3\. LỊCH SỬ CHAT[\s\S]*?(?=###|$)/)?.[0]?.length || 0,
+        promptPreview: fullPrompt.substring(0, 1000)
+      },
+      timestamp: Date.now(),
+      sessionId: 'debug-session',
+      runId: 'run1',
+      hypothesisId: 'D'
+    })
+  }).catch(() => {});
+  // #endregion
+  
+  return fullPrompt;
+}
+
+// System Instruction cho AI Assistant
+const SYSTEM_INSTRUCTION = `
+Bạn là Trợ lý AI Thông minh nội bộ.
+Nhiệm vụ: Trả lời câu hỏi của nhân viên dựa trên tài liệu được cung cấp.
+
+YÊU CẦU BẮT BUỘC VỀ ĐỊNH DẠNG (JSON):
+Bạn KHÔNG được trả lời bằng văn bản thường. Bạn PHẢI trả về một JSON object duy nhất với cấu trúc sau:
+{
+  "analysis": "Phân tích ngắn gọn ý định người dùng và ngữ cảnh (để debug)",
+  "answer": "Câu trả lời chi tiết cho người dùng (Sử dụng Markdown để format: in đậm, list, table...)",
+  "citations": ["Tên file 1", "Tên file 2"],
+  "suggestions": [
+    "Gợi ý hành động 1 (ngắn gọn dưới 10 từ)",
+    "Gợi ý hành động 2",
+    "Gợi ý hành động 3"
+  ]
+}
+
+NGUYÊN TẮC "THÔNG MINH":
+1. **Hiểu ngữ cảnh:** Nếu user hỏi "nó", "cái đó", hãy nhìn LỊCH SỬ CHAT để biết đang nói cái gì.
+2. **Nhớ sâu (Cá nhân hóa):** Dựa vào "THÔNG TIN NGƯỜI DÙNG" để điều chỉnh giọng điệu.
+   - Nếu là Sếp/Quản lý: Trả lời súc tích, tập trung vào kết quả, chi phí.
+   - Nếu là Nhân viên mới: Giải thích chi tiết, tận tình từng bước.
+3. **Gợi ý chủ động:** Luôn đoán xem user muốn làm gì tiếp theo. Ví dụ: Hỏi về "quy trình công tác" -> Gợi ý "Tải mẫu đơn công tác".
+4. **Trung thực:** Chỉ trả lời dựa trên CONTEXT. Không bịa đặt.
+
+⚠️ QUAN TRỌNG VỀ ĐỊNH DẠNG JSON:
+- Bạn PHẢI trả về JSON object, KHÔNG được trả về văn bản thường.
+- JSON phải có đầy đủ 4 fields: analysis, answer, citations, suggestions.
+- Field "citations" phải là array (có thể rỗng [] nếu không có tài liệu tham khảo).
+- Field "suggestions" phải là array với ít nhất 1-3 gợi ý (mỗi gợi ý ngắn gọn dưới 10 từ).
+- Field "answer" phải sử dụng Markdown để format (in đậm, list, table, v.v.).
+`;
+
+/**
  * Chat Function - Xử lý câu hỏi từ người dùng
  * 
  * Request body:
@@ -48,22 +356,31 @@ exports.chatFunction = onRequest(
   async (req, res) => {
     // Handle CORS preflight
     cors(req, res, async () => {
-      // Only allow POST requests
-      if (req.method !== "POST") {
-        return res.status(405).json({
-          error: "Method Not Allowed",
-          message: "Only POST method is allowed",
-        });
-      }
+      try {
+        // Only allow POST requests
+        if (req.method !== "POST") {
+          return res.status(405).json({
+            error: "Method Not Allowed",
+            message: "Only POST method is allowed",
+          });
+        }
 
-      // Get question and Microsoft access token from request body
-      const {question, microsoftAccessToken} = req.body;
+      // Get question, Microsoft access token, chat history, and user info from request body
+      const {question, microsoftAccessToken, chatHistory, userInfo} = req.body;
       // #region agent log
-      console.log('📥 Backend received request:', {
+      console.log('🔍 [DEBUG] Backend received request:', {
         question: question?.substring(0, 50),
         hasToken: !!microsoftAccessToken,
-        tokenLength: microsoftAccessToken?.length || 0,
-        tokenPrefix: microsoftAccessToken?.substring(0, 20) || 'none'
+        hasChatHistory: !!chatHistory,
+        chatHistoryLength: chatHistory?.length || 0,
+        chatHistoryType: Array.isArray(chatHistory) ? 'array' : typeof chatHistory,
+        chatHistoryPreview: chatHistory && Array.isArray(chatHistory) && chatHistory.length > 0 
+          ? chatHistory.slice(0, 2).map(m => ({ role: m.role, content: m.content?.substring(0, 30) }))
+          : null,
+        fullChatHistory: chatHistory && Array.isArray(chatHistory) 
+          ? chatHistory.map((msg, idx) => ({ index: idx, role: msg.role, content: msg.content }))
+          : null,
+        hasUserInfo: !!userInfo
       });
       // #endregion
 
@@ -209,7 +526,9 @@ exports.chatFunction = onRequest(
       // ============================================
       
       let answer = "";
-      const sources = [];
+      let sources = [];
+      let analysis = "";
+      let suggestions = [];
       
       try {
         // Lấy API key từ secret
@@ -366,35 +685,82 @@ exports.chatFunction = onRequest(
               const currentTimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
               const currentDateTimeStr = `${dayOfWeek}, ngày ${day} ${monthName} năm ${year}, lúc ${currentTimeStr}`;
               
-              // Tạo prompt với yêu cầu trả lời bằng tiếng Việt và thông tin ngày hiện tại
-              let systemPrompt = `Bạn là một trợ lý AI thông minh và hữu ích. Hãy luôn trả lời bằng tiếng Việt một cách tự nhiên, dễ hiểu và thân thiện. Nếu người dùng hỏi bằng tiếng Việt, hãy trả lời bằng tiếng Việt. Nếu người dùng hỏi bằng ngôn ngữ khác, bạn có thể trả lời bằng ngôn ngữ đó hoặc tiếng Việt tùy theo ngữ cảnh.
+              // Chuẩn bị dữ liệu cho buildPrompt
+              // 1. UserDoc - Thông tin người dùng
+              const userDoc = userInfo ? {
+                displayName: userInfo.displayName || 'Không có',
+                email: userInfo.email || 'Không có',
+                jobTitle: userInfo.jobTitle || (userInfo.role === 'manager' ? 'Sếp/Quản lý' : userInfo.role === 'new_employee' ? 'Nhân viên mới' : 'Nhân viên'),
+                department: userInfo.department || 'Chưa rõ',
+                role: userInfo.role || 'employee',
+                notes: userInfo.notes || 'Thích câu trả lời rõ ràng, đầy đủ'
+              } : null;
 
-⚠️ QUAN TRỌNG VỀ THỜI GIAN:
-- Ngày giờ hiện tại (theo múi giờ Việt Nam): ${currentDateTimeStr}
-- Khi người dùng hỏi về "hôm nay", "ngày hôm nay", "hôm nay là ngày mấy", hoặc các câu hỏi tương tự về ngày hiện tại, bạn PHẢI sử dụng thông tin ngày giờ hiện tại ở trên.
-- KHÔNG được sử dụng thông tin ngày từ training data hoặc dữ liệu cũ.
-- Luôn trả lời chính xác về ngày hiện tại dựa trên thông tin được cung cấp ở trên.
-
-`;
+              // 2. History - Lịch sử chat (chỉ lấy tối đa 20 messages gần nhất)
+              const recentHistory = chatHistory && Array.isArray(chatHistory) && chatHistory.length > 0
+                ? chatHistory.slice(-20)
+                : [];
               
-              // Thêm email context nếu có
-              if (emailContext) {
-                systemPrompt += `\n📧 THÔNG TIN EMAIL TỪ OUTLOOK:\n${emailContext}\n\nKhi người dùng hỏi về email, hãy sử dụng thông tin email ở trên để trả lời. Nếu không tìm thấy email phù hợp, hãy thông báo rõ ràng.\n\n`;
-                // #region agent log
-                console.log('✅ Email context added to prompt:', emailContext.substring(0, 200));
-                // #endregion
+              // #region agent log
+              console.log('🔍 [DEBUG] History preparation for prompt:', {
+                chatHistoryProvided: !!chatHistory,
+                chatHistoryIsArray: Array.isArray(chatHistory),
+                chatHistoryLength: chatHistory?.length || 0,
+                recentHistoryLength: recentHistory.length,
+                recentHistoryPreview: recentHistory.length > 0 
+                  ? recentHistory.slice(0, 2).map(m => ({ role: m.role, content: m.content?.substring(0, 30) }))
+                  : null,
+                fullRecentHistory: recentHistory.map((msg, idx) => ({ index: idx, role: msg.role, content: msg.content }))
+              });
+              // #endregion
+              
+              if (recentHistory.length > 0) {
+                console.log(`✅ Preparing chat history for prompt: ${recentHistory.length} messages`);
               } else {
-                // #region agent log
-                console.log('⚠️ No email context to add to prompt');
-                // #endregion
+                console.log('⚠️ No chat history provided');
+              }
+
+              // 3. Context - Kết hợp email và OneDrive context
+              let combinedContext = '';
+              if (emailContext) {
+                combinedContext += `📧 THÔNG TIN EMAIL TỪ OUTLOOK:\n${emailContext}\n\nKhi người dùng hỏi về email, hãy sử dụng thông tin email ở trên để trả lời. Nếu không tìm thấy email phù hợp, hãy thông báo rõ ràng.\n\n`;
+                console.log('✅ Email context prepared for prompt:', emailContext.substring(0, 200));
               }
               
-              // Thêm OneDrive context nếu có
               if (oneDriveContext) {
-                systemPrompt += `\n📁 THÔNG TIN TỪ ONEDRIVE:\n${oneDriveContext}\n\nKhi người dùng hỏi về file hoặc tài liệu trong OneDrive, hãy sử dụng thông tin ở trên để trả lời. Nếu cần tóm tắt nội dung file, hãy làm ngắn gọn và thông minh.\n\n`;
-                console.log('✅ OneDrive context added to prompt:', oneDriveContext.substring(0, 200));
-              } else {
-                console.log('⚠️ No OneDrive context to add to prompt');
+                combinedContext += `📁 THÔNG TIN TỪ ONEDRIVE:\n${oneDriveContext}\n\nKhi người dùng hỏi về file hoặc tài liệu trong OneDrive, hãy sử dụng thông tin ở trên để trả lời. Nếu cần tóm tắt nội dung file, hãy làm ngắn gọn và thông minh.\n\n`;
+                console.log('✅ OneDrive context prepared for prompt:', oneDriveContext.substring(0, 200));
+              }
+
+              if (!combinedContext) {
+                combinedContext = 'Không có tài liệu tham khảo từ email hoặc OneDrive.';
+              }
+
+              // 4. UserQuery - Câu hỏi của user
+              const userQuery = question;
+
+              // Sử dụng hàm buildPrompt để tạo prompt
+              const systemPrompt = buildPrompt(userDoc, recentHistory, combinedContext, userQuery, currentDateTimeStr);
+              
+              // #region agent log
+              const historySectionMatch = systemPrompt.match(/### 3\. LỊCH SỬ CHAT[\s\S]*?(?=### 4\.|$)/);
+              const historySectionText = historySectionMatch ? historySectionMatch[0] : '';
+              console.log('🔍 [DEBUG] Prompt built - checking history inclusion:', {
+                promptLength: systemPrompt.length,
+                hasHistoryInPrompt: systemPrompt.includes('LỊCH SỬ CHAT'),
+                historySectionLength: historySectionText.length,
+                recentHistoryCount: recentHistory.length,
+                promptPreview: systemPrompt.substring(0, 500),
+                fullHistorySection: historySectionText.substring(0, 1000),
+                containsNameInfo: historySectionText.toLowerCase().includes('tên') || historySectionText.toLowerCase().includes('chinh')
+              });
+              // #endregion
+              
+              console.log('✅ Prompt built using buildPrompt function');
+              if (recentHistory.length > 0) {
+                console.log(`   - History included: ${recentHistory.length} messages`);
+                console.log(`   - History section length: ${historySectionText.length} chars`);
+                console.log(`   - History section preview: ${historySectionText.substring(0, 300)}`);
               }
               
               // Sử dụng v1beta cho các model mới (2.0+, 1.5-flash), v1 cho các model cũ
@@ -415,10 +781,12 @@ exports.chatFunction = onRequest(
                 const apiUrl = `https://generativelanguage.googleapis.com/${apiVersionToUse}/models/${selectedModel}:generateContent?key=${geminiApiKey}`;
                 
                 // Với v1beta, có thể dùng systemInstruction, với v1 thì đưa vào prompt
+                // Lưu ý: buildPrompt đã bao gồm cả question ở cuối, nên với v1beta chỉ cần systemInstruction
+                // Với v1, cần append question vào systemPrompt (nhưng buildPrompt đã có sẵn)
                 const requestBody = apiVersionToUse === 'v1beta' 
                   ? {
                       contents: [{
-                        parts: [{ text: question }]
+                        parts: [{ text: userQuery }]
                       }],
                       systemInstruction: {
                         parts: [{ text: systemPrompt }]
@@ -426,7 +794,7 @@ exports.chatFunction = onRequest(
                     }
                   : {
                       contents: [{
-                        parts: [{ text: systemPrompt + question }]
+                        parts: [{ text: systemPrompt }]
                       }]
                     };
                 
@@ -497,8 +865,56 @@ exports.chatFunction = onRequest(
               const result = await response.json();
               
               if (result.candidates && result.candidates[0] && result.candidates[0].content && result.candidates[0].content.parts) {
-                answer = result.candidates[0].content.parts[0].text;
+                const rawAnswer = result.candidates[0].content.parts[0].text;
                 console.log(`Successfully used model: ${selectedModel}`);
+                
+                // Parse JSON response từ AI
+                // Lưu ý: Gemini đôi khi bọc JSON trong ```json ... ```, cần clean trước khi parse
+                try {
+                  // Bước 1: Loại bỏ markdown code blocks (```json ... ``` hoặc ``` ... ```)
+                  let cleanText = rawAnswer.trim();
+                  
+                  // Loại bỏ ```json ở đầu và ``` ở cuối
+                  cleanText = cleanText.replace(/^```json\s*/i, '').replace(/^```\s*/, '');
+                  cleanText = cleanText.replace(/\s*```$/i, '').trim();
+                  
+                  // Bước 2: Tìm JSON object trong response (có thể có text trước/sau JSON)
+                  const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+                  if (jsonMatch) {
+                    const jsonString = jsonMatch[0];
+                    const parsedResponse = JSON.parse(jsonString);
+                    
+                    // Validate cấu trúc JSON
+                    if (parsedResponse.answer) {
+                      answer = parsedResponse.answer;
+                      // Cập nhật sources từ citations nếu có
+                      if (parsedResponse.citations && Array.isArray(parsedResponse.citations)) {
+                        sources = parsedResponse.citations;
+                      }
+                      // Lưu các field khác
+                      analysis = parsedResponse.analysis || '';
+                      suggestions = Array.isArray(parsedResponse.suggestions) ? parsedResponse.suggestions : [];
+                      console.log('✅ Parsed JSON response successfully');
+                      console.log('   - Analysis:', analysis ? analysis.substring(0, 50) + '...' : 'N/A');
+                      console.log('   - Citations:', sources.length);
+                      console.log('   - Suggestions:', suggestions.length);
+                    } else {
+                      // Nếu không có field answer, dùng rawAnswer
+                      console.warn('⚠️ JSON response không có field "answer", sử dụng raw answer');
+                      answer = rawAnswer;
+                    }
+                  } else {
+                    // Không tìm thấy JSON, dùng rawAnswer
+                    console.warn('⚠️ AI response không phải JSON format, sử dụng raw answer');
+                    console.warn('   Clean text preview:', cleanText.substring(0, 200));
+                    answer = rawAnswer;
+                  }
+                } catch (parseError) {
+                  // Nếu parse JSON lỗi, dùng rawAnswer
+                  console.warn('⚠️ Lỗi parse JSON response:', parseError.message);
+                  console.warn('   Raw answer preview:', rawAnswer.substring(0, 200));
+                  answer = rawAnswer;
+                }
               } else {
                 throw new Error("Invalid response format from API");
               }
@@ -571,16 +987,30 @@ exports.chatFunction = onRequest(
       // 2. Thêm context vào prompt
       // 3. Cập nhật sources array với tài liệu tìm được
       
+      // Tạo response object với các field đã được parse
       const response = {
         answer: answer,
         sources: sources,
-        // Hoặc có thể trả về format khác:
-        // content: answer,
-        // citations: sources
+        citations: sources, // Alias cho compatibility
+        // Thêm các field mới nếu có
+        ...(analysis && { analysis }),
+        ...(suggestions.length > 0 && { suggestions })
       };
 
       // Return success response
       return res.status(200).json(response);
+      } catch (error) {
+        // Catch any unhandled errors
+        console.error("Unhandled error in chatFunction:", error);
+        console.error("Error stack:", error.stack);
+        
+        // Return error response
+        return res.status(500).json({
+          error: "Internal Server Error",
+          message: error.message || "An unexpected error occurred",
+          details: process.env.NODE_ENV === "development" ? error.stack : undefined
+        });
+      }
     });
   }
 );
@@ -589,6 +1019,9 @@ exports.chatFunction = onRequest(
  * Helper function: Check if question is related to email
  */
 function isEmailRelatedQuestion(question) {
+  if (!question || typeof question !== 'string') {
+    return false;
+  }
   const emailKeywords = [
     'email', 'mail', 'thư', 'gmail', 'outlook',
     'gửi', 'nhận', 'xin nghỉ', 'nghỉ phép', 'đơn xin',
@@ -927,6 +1360,9 @@ function extractSearchTerms(question) {
  * This helps detect file-related questions even without "onedrive" keyword
  */
 function isFileRelatedQuestionSmart(question) {
+  if (!question || typeof question !== 'string') {
+    return false;
+  }
   const fileActionKeywords = [
     'liệt kê', 'liet ke', 'danh sách', 'danh sach', 'list', 'kể', 'ke',
     'tên file', 'ten file', 'file nào', 'file nao', 'file gì', 'file gi',
@@ -963,6 +1399,9 @@ function isFileRelatedQuestionSmart(question) {
 }
 
 function isOneDriveRelatedQuestion(question) {
+  if (!question || typeof question !== 'string') {
+    return false;
+  }
   const oneDriveKeywords = [
     'onedrive', 'one drive', 'drive', 'file', 'tài liệu', 'document',
     'tìm file', 'tìm tài liệu', 'file nào', 'tài liệu nào',
