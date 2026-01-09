@@ -145,10 +145,6 @@ export class ChatService {
       ...(userInfo && { userInfo })
     };
 
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.service.ts:116',message:'Request body before send',data:{hasChatHistory:!!body.chatHistory,chatHistoryLength:body.chatHistory?.length||0,hasUserInfo:!!body.userInfo,questionLength:question.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-
     return this.http.post<ChatResponse>(this.apiUrl, body, { headers }).pipe(
       catchError((error) => {
         console.error('ChatService: API Error:', error);

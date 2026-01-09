@@ -283,9 +283,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
    * Lưu tất cả messages (bao gồm cả welcome message) để AI có đầy đủ context
    */
   private saveChatHistory(): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:281',message:'saveChatHistory ENTRY',data:{messagesCount:this.messages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-    // #endregion
     try {
       // Lấy history hiện tại từ localStorage (nếu có)
       let existingHistory: Message[] = [];
@@ -302,9 +299,7 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
           }
         }
       } catch (e) {
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:295',message:'localStorage parse error in saveChatHistory',data:{error:String(e)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-        // #endregion
+        // Ignore parse errors
       }
 
       // Merge với messages hiện tại trên UI
@@ -360,21 +355,9 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
       // Chỉ lưu tối đa 50 messages gần nhất để tránh localStorage quá lớn
       const messagesToSave = uniqueMessages.slice(-50);
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:340',message:'Before saving to localStorage',data:{messagesToSaveCount:messagesToSave.length,uniqueMessagesCount:uniqueMessages.length,allMessagesCount:allMessages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
-      
       localStorage.setItem('thihi_chat_history', JSON.stringify(messagesToSave));
       console.log('✅ Saved chat history to localStorage:', messagesToSave.length, 'messages (not displayed on UI)');
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:345',message:'saveChatHistory SUCCESS',data:{savedCount:messagesToSave.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:348',message:'saveChatHistory ERROR',data:{error:String(error),errorType:error instanceof Error ? error.constructor.name : typeof error},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
       console.error('Error saving chat history:', error);
       // Nếu localStorage đầy, xóa một số messages cũ
       if (error instanceof DOMException && error.name === 'QuotaExceededError') {
@@ -443,9 +426,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
    * Excludes the current user message that is about to be sent
    */
   private getChatHistoryForAPI(): Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }> {
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:388',message:'getChatHistoryForAPI ENTRY',data:{messagesCount:this.messages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     try {
       // ƯU TIÊN: Lấy từ UI messages (session hiện tại) - đây là messages đang hiển thị
       // Bỏ message cuối cùng (message user vừa thêm vào, đang được gửi)
@@ -453,30 +433,18 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         ? this.messages.slice(0, -1)  // Bỏ message cuối (đang gửi)
         : this.messages.filter(msg => msg.role !== 'assistant' || !msg.content.includes('Chào bạn! Tôi là')); // Bỏ welcome message nếu chỉ có 1 message
 
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:395',message:'UI messages extracted',data:{uiMessagesCount:uiMessages.length,allMessagesCount:this.messages.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
-
       // Lấy từ localStorage (sessions trước) để có context đầy đủ
       let savedHistory: Message[] = [];
       try {
         const saved = localStorage.getItem('thihi_chat_history');
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:400',message:'localStorage check',data:{hasSaved:!!saved,savedLength:saved?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
             savedHistory = parsed;
-            // #region agent log - Log full saved history content
-            fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:470',message:'Full saved history from localStorage',data:{savedHistoryLength:savedHistory.length,fullSavedHistory:savedHistory.map((msg,idx)=>({index:idx,role:msg.role,content:msg.content,contentLength:msg.content?.length||0})),containsNameInfo:savedHistory.some(m=>m.content?.toLowerCase().includes('tên')||m.content?.toLowerCase().includes('name'))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-            // #endregion
           }
         }
       } catch (e) {
-        // #region agent log
-        fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:407',message:'localStorage parse error',data:{error:String(e)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
+        // Ignore parse errors
       }
 
       // Kết hợp: UI messages (ưu tiên) + localStorage messages (sessions trước)
@@ -508,10 +476,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
       // Lấy tối đa 20 messages gần nhất để tránh prompt quá dài
       const recentMessages = allMessages.slice(-20);
-      
-      // #region agent log - Log final history before conversion
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:510',message:'Final history before conversion',data:{recentMessagesLength:recentMessages.length,uiMessagesCount:uiMessages.length,savedHistoryCount:savedHistory.length,fullRecentMessages:recentMessages.map((msg,idx)=>({index:idx,role:msg.role,content:msg.content,contentLength:msg.content?.length||0})),containsNameInfo:recentMessages.some(m=>m.content?.toLowerCase().includes('tên')||m.content?.toLowerCase().includes('name'))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
 
       const history = recentMessages.map((msg: any) => ({
         role: msg.role as 'user' | 'assistant',
@@ -524,14 +488,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
                   : new Date(msg.timestamp).toISOString()))
           : undefined
       }));
-      
-      // #region agent log - Log final history being sent to API
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:527',message:'Final history being sent to API',data:{historyLength:history.length,fullHistory:history.map((msg,idx)=>({index:idx,role:msg.role,content:msg.content,contentLength:msg.content?.length||0})),containsNameInfo:history.some(m=>m.content?.toLowerCase().includes('tên')||m.content?.toLowerCase().includes('name'))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
-
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:535',message:'getChatHistoryForAPI EXIT',data:{historyLength:history.length,uiMessagesCount:uiMessages.filter(m=>m.role==='user'||m.role==='assistant').length,savedHistoryCount:savedHistory.length,recentMessagesCount:recentMessages.length,historyPreview:history.slice(0,3).map(m=>({role:m.role,content:m.content.substring(0,30)}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
 
       console.log('📤 Sending chat history:', history.length, 'messages');
       console.log('   - From UI (current session):', uiMessages.filter(m => m.role === 'user' || m.role === 'assistant').length);
@@ -545,9 +501,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
       return history;
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:460',message:'getChatHistoryForAPI ERROR',data:{error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       console.error('❌ Error getting chat history for API:', error);
       return [];
     }
@@ -1055,10 +1008,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
     
     // Get chat history (exclude current message that was just added)
     const chatHistory = this.getChatHistoryForAPI();
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:970',message:'Before sending to API',data:{chatHistoryLength:chatHistory.length,chatHistoryPreview:chatHistory.slice(0,2).map(m=>({role:m.role,content:m.content?.substring(0,30)}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     
     // Get user info for personalization
     const userInfo = this.getUserInfo();

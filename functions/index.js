@@ -31,34 +31,6 @@ const FORCED_FREE_MODEL = 'gemini-1.5-flash'; // Model miễn phí với quota c
  * @returns {string} Prompt đầy đủ để gửi Gemini
  */
 function buildPrompt(userDoc, history, context, userQuery, currentDateTimeStr) {
-  // #region agent log
-  const debugLogBuildPrompt = {
-    location: 'index.js:33',
-    message: 'buildPrompt ENTRY',
-    data: {
-      hasUserDoc: !!userDoc,
-      hasHistory: !!history,
-      historyIsArray: Array.isArray(history),
-      historyLength: history?.length || 0,
-      historyPreview: history && Array.isArray(history) && history.length > 0
-        ? history.slice(0, 2).map(m => ({ role: m.role, content: m.content?.substring(0, 30) }))
-        : null,
-      hasContext: !!context,
-      contextLength: context?.length || 0,
-      userQueryLength: userQuery?.length || 0
-    },
-    timestamp: Date.now(),
-    sessionId: 'debug-session',
-    runId: 'run1',
-    hypothesisId: 'D'
-  };
-  fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(debugLogBuildPrompt)
-  }).catch(() => {});
-  // #endregion
-  
   // Tạo phần thông tin người dùng
   let userInfoSection = '';
   if (userDoc) {
