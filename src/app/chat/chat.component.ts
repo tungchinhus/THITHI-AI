@@ -1041,6 +1041,13 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         // Save chat history after receiving response
         this.saveChatHistory();
         
+        // Focus vào khung chat sau khi AI trả lời xong
+        setTimeout(() => {
+          if (this.messageInput?.nativeElement) {
+            this.messageInput.nativeElement.focus();
+          }
+        }, 100);
+        
         // Text-to-speech đã được tắt
         // if (wasVoiceMessage) {
         //   this.speak(aiResponse.content);
@@ -1071,6 +1078,13 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
           timestamp: new Date()
         });
         this.shouldScroll = true;
+        
+        // Focus vào khung chat sau khi có lỗi
+        setTimeout(() => {
+          if (this.messageInput?.nativeElement) {
+            this.messageInput.nativeElement.focus();
+          }
+        }, 100);
       }
     });
   }

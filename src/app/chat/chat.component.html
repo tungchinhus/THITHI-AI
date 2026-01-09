@@ -105,7 +105,7 @@
       
       <!-- Microsoft Outlook Login Button -->
       <button
-        *ngIf="!isMicrosoftTokenValid()"
+        *ngIf="false"
         (click)="loginWithMicrosoft(); $event.preventDefault(); $event.stopPropagation();"
         [disabled]="isLoadingMicrosoft"
         class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1"
@@ -124,7 +124,7 @@
       
       <!-- Login Button (when not logged in) -->
       <button
-        *ngIf="!user"
+        *ngIf="false"
         (click)="loginWithGoogle(); $event.preventDefault(); $event.stopPropagation();"
         [disabled]="isLoadingAuth"
         class="px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2"
