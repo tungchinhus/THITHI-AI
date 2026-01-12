@@ -6,6 +6,16 @@ const {Client} = require("@microsoft/microsoft-graph-client");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
 const pdfParse = require("pdf-parse");
+const admin = require("firebase-admin");
+const crypto = require("crypto");
+
+// Initialize Firebase Admin if not already initialized
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+const db = admin.firestore();
+const auth = admin.auth();
 
 // Set global options for all functions
 setGlobalOptions({
@@ -1968,3 +1978,378 @@ exports.healthCheck = onRequest(
   }
 );
 
+// ============================================
+// TELEGRAM MINI APP AUTHENTICATION FUNCTIONS
+// ============================================
+
+/**
+ * Utility: Normalize phone number (remove +84, spaces, etc.)
+ * Input: "+84901234567" or "0901234567" or "84 901 234 567"
+ * Output: "0901234567"
+ */
+function normalizePhoneNumber(phone) {
+  if (!phone || typeof phone !== 'string') {
+    return null;
+  }
+  // Remove all non-digit characters
+  let normalized = phone.replace(/\D/g, '');
+  // Remove country code +84 if present
+  if (normalized.startsWith('84')) {
+    normalized = normalized.substring(2);
+  }
+  // Remove leading 0 if present (should keep it for Vietnam format)
+  // Return as is (should be 10 digits starting with 0)
+  return normalized;
+}
+
+/**
+ * Utility: Verify Telegram initData signature
+ * Telegram sends initData as URL-encoded string with hash parameter
+ * We need to verify the hash using HMAC-SHA-256 with bot token as secret
+ */
+function verifyTelegramInitData(initData, botToken) {
+  try {
+    if (!initData || !botToken) {
+      return { valid: false, error: 'Missing initData or botToken' };
+    }
+
+    // Parse initData (URL-encoded string)
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    
+    if (!hash) {
+      return { valid: false, error: 'Missing hash in initData' };
+    }
+
+    // Remove hash from params and sort remaining params
+    params.delete('hash');
+    const dataCheckString = Array.from(params.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n');
+
+    // Calculate HMAC-SHA-256
+    const secretKey = crypto
+      .createHmac('sha256', 'WebAppData')
+      .update(botToken)
+      .digest();
+    
+    const calculatedHash = crypto
+      .createHmac('sha256', secretKey)
+      .update(dataCheckString)
+      .digest('hex');
+
+    // Compare hashes (constant-time comparison)
+    const isValid = crypto.timingSafeEqual(
+      Buffer.from(hash, 'hex'),
+      Buffer.from(calculatedHash, 'hex')
+    );
+
+    if (!isValid) {
+      return { valid: false, error: 'Invalid signature' };
+    }
+
+    // Check auth_date (should be within last 24 hours)
+    const authDate = params.get('auth_date');
+    if (authDate) {
+      const authTimestamp = parseInt(authDate, 10);
+      const now = Math.floor(Date.now() / 1000);
+      const maxAge = 24 * 60 * 60; // 24 hours
+      
+      if (now - authTimestamp > maxAge) {
+        return { valid: false, error: 'initData expired' };
+      }
+    }
+
+    // Extract user data
+    const userStr = params.get('user');
+    let user = null;
+    if (userStr) {
+      try {
+        user = JSON.parse(userStr);
+      } catch (e) {
+        return { valid: false, error: 'Invalid user data' };
+      }
+    }
+
+    return {
+      valid: true,
+      user: user,
+      authDate: authDate ? parseInt(authDate, 10) : null,
+      queryId: params.get('query_id'),
+      hash: hash
+    };
+  } catch (error) {
+    return { valid: false, error: error.message };
+  }
+}
+
+/**
+ * Onboarding Endpoint (for Telegram Bot)
+ * Links phone number to telegramId in employees collection
+ * 
+ * Request body:
+ * {
+ *   "phoneNumber": "0901234567",
+ *   "telegramId": "123456789"
+ * }
+ * 
+ * Response:
+ * {
+ *   "success": true,
+ *   "employee": { ... }
+ * }
+ */
+exports.telegramOnboarding = onRequest(
+  {
+    cors: true,
+    maxInstances: 10,
+    secrets: ["TELEGRAM_BOT_TOKEN"], // Optional: for additional verification
+  },
+  async (req, res) => {
+    cors(req, res, async () => {
+      try {
+        if (req.method !== "POST") {
+          return res.status(405).json({
+            error: "Method Not Allowed",
+            message: "Only POST method is allowed",
+          });
+        }
+
+        const { phoneNumber, telegramId } = req.body;
+
+        // Validate input
+        if (!phoneNumber || typeof phoneNumber !== 'string') {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "phoneNumber is required and must be a string",
+          });
+        }
+
+        if (!telegramId || typeof telegramId !== 'string') {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "telegramId is required and must be a string",
+          });
+        }
+
+        // Normalize phone number
+        const normalizedPhone = normalizePhoneNumber(phoneNumber);
+        if (!normalizedPhone || normalizedPhone.length < 10) {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "Invalid phone number format",
+          });
+        }
+
+        // Check if employee exists with this phone number
+        const employeesRef = db.collection('employees');
+        const snapshot = await employeesRef
+          .where('phoneNumber', '==', normalizedPhone)
+          .where('isActive', '==', true)
+          .limit(1)
+          .get();
+
+        if (snapshot.empty) {
+          return res.status(404).json({
+            error: "Not Found",
+            message: "Employee not found with this phone number or not active",
+          });
+        }
+
+        const employeeDoc = snapshot.docs[0];
+        const employeeData = employeeDoc.data();
+
+        // Check if already linked to another telegramId
+        if (employeeData.telegramId && employeeData.telegramId !== telegramId && employeeData.isLinked) {
+          return res.status(409).json({
+            error: "Conflict",
+            message: "This phone number is already linked to another Telegram account",
+          });
+        }
+
+        // Update employee record
+        await employeeDoc.ref.update({
+          telegramId: telegramId,
+          isLinked: true,
+          linkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Return success
+        return res.status(200).json({
+          success: true,
+          message: "Phone number linked successfully",
+          employee: {
+            id: employeeDoc.id,
+            phoneNumber: normalizedPhone,
+            fullName: employeeData.fullName,
+            role: employeeData.role,
+            telegramId: telegramId,
+            isLinked: true,
+          },
+        });
+      } catch (error) {
+        console.error("Error in telegramOnboarding:", error);
+        return res.status(500).json({
+          error: "Internal Server Error",
+          message: error.message || "An unexpected error occurred",
+        });
+      }
+    });
+  }
+);
+
+/**
+ * Login Endpoint (for Telegram Mini App)
+ * Verifies Telegram initData and returns Firebase Custom Token
+ * 
+ * Request body:
+ * {
+ *   "initData": "query_id=...&user=...&auth_date=...&hash=..."
+ * }
+ * 
+ * Response:
+ * {
+ *   "success": true,
+ *   "customToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+ *   "employee": { ... }
+ * }
+ */
+exports.telegramLogin = onRequest(
+  {
+    cors: true,
+    maxInstances: 10,
+    secrets: ["TELEGRAM_BOT_TOKEN"], // Required for signature verification
+  },
+  async (req, res) => {
+    cors(req, res, async () => {
+      try {
+        if (req.method !== "POST") {
+          return res.status(405).json({
+            error: "Method Not Allowed",
+            message: "Only POST method is allowed",
+          });
+        }
+
+        const { initData } = req.body;
+
+        // Validate input
+        if (!initData || typeof initData !== 'string') {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "initData is required and must be a string",
+          });
+        }
+
+        // Get bot token from secrets
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (!botToken) {
+          console.error("TELEGRAM_BOT_TOKEN secret not configured");
+          return res.status(500).json({
+            error: "Internal Server Error",
+            message: "Telegram bot token not configured",
+          });
+        }
+
+        // Verify Telegram initData signature
+        const verification = verifyTelegramInitData(initData, botToken);
+        if (!verification.valid) {
+          return res.status(401).json({
+            error: "Unauthorized",
+            message: verification.error || "Invalid Telegram initData",
+          });
+        }
+
+        const telegramUser = verification.user;
+        if (!telegramUser || !telegramUser.id) {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "Telegram user data not found in initData",
+          });
+        }
+
+        const telegramId = String(telegramUser.id);
+
+        // Check if employee exists with this telegramId and is linked
+        const employeesRef = db.collection('employees');
+        const snapshot = await employeesRef
+          .where('telegramId', '==', telegramId)
+          .where('isLinked', '==', true)
+          .where('isActive', '==', true)
+          .limit(1)
+          .get();
+
+        if (snapshot.empty) {
+          return res.status(403).json({
+            error: "Forbidden",
+            message: "Telegram account not linked to any employee or employee not active",
+          });
+        }
+
+        const employeeDoc = snapshot.docs[0];
+        const employeeData = employeeDoc.data();
+
+        // Create or get Firebase user
+        let firebaseUser;
+        const firebaseUid = `telegram_${telegramId}`;
+        
+        try {
+          // Try to get existing user
+          firebaseUser = await auth.getUser(firebaseUid);
+        } catch (error) {
+          // User doesn't exist, create new one
+          if (error.code === 'auth/user-not-found') {
+            firebaseUser = await auth.createUser({
+              uid: firebaseUid,
+              displayName: employeeData.fullName || telegramUser.first_name || 'Employee',
+              phoneNumber: employeeData.phoneNumber ? `+84${employeeData.phoneNumber.substring(1)}` : null,
+              // Store telegramId as custom claim for easy access
+              customClaims: {
+                telegramId: telegramId,
+                employeeId: employeeDoc.id,
+                role: employeeData.role || 'employee',
+              },
+            });
+          } else {
+            throw error;
+          }
+        }
+
+        // Update custom claims if needed
+        if (firebaseUser.customClaims?.employeeId !== employeeDoc.id) {
+          await auth.setCustomUserClaims(firebaseUser.uid, {
+            telegramId: telegramId,
+            employeeId: employeeDoc.id,
+            role: employeeData.role || 'employee',
+          });
+        }
+
+        // Generate Firebase Custom Token
+        const customToken = await auth.createCustomToken(firebaseUser.uid, {
+          telegramId: telegramId,
+          employeeId: employeeDoc.id,
+          role: employeeData.role || 'employee',
+        });
+
+        // Return success with custom token
+        return res.status(200).json({
+          success: true,
+          customToken: customToken,
+          employee: {
+            id: employeeDoc.id,
+            phoneNumber: employeeData.phoneNumber,
+            fullName: employeeData.fullName,
+            role: employeeData.role,
+            telegramId: telegramId,
+          },
+        });
+      } catch (error) {
+        console.error("Error in telegramLogin:", error);
+        return res.status(500).json({
+          error: "Internal Server Error",
+          message: error.message || "An unexpected error occurred",
+        });
+      }
+    });
+  }
+);

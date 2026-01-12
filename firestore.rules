@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Employees collection - only readable by authenticated users
+    // Write access only through Cloud Functions (server-side)
+    match /employees/{employeeId} {
+      // Allow read if user is authenticated
+      allow read: if request.auth != null;
+      
+      // Write operations only through Cloud Functions (server-side)
+      // No direct client writes allowed
+      allow write: if false;
+    }
+    
+    // Users collection (optional, for user profiles)
+    match /users/{userId} {
+      // Users can only read/write their own document
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Default: deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

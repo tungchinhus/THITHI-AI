@@ -3,6 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MarkdownModule } from 'ngx-markdown';
 import { ChatService } from './chat.service';
+import { TelegramAuthService } from '../telegram-auth.service';
 import { getFirebaseAuth, getFirebaseApp } from '../firebase.config';
 import { signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { environment } from '../../environments/environment';
@@ -52,10 +53,28 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
   private silenceTimeout: any = null; // Timeout để tự động dừng khi im lặng
   private lastMessageWasVoice: boolean = false; // Flag to track if last message was sent via voice
   private speechSynthesis: SpeechSynthesis | null = null; // Text-to-speech API
+  isTelegramMiniApp: boolean = false;
+  isTelegramAuthenticated: boolean = false;
 
-  constructor(private chatService: ChatService) {}
+  constructor(
+    private chatService: ChatService,
+    private telegramAuthService: TelegramAuthService
+  ) {}
 
   ngOnInit(): void {
+    // Check if running in Telegram Mini App
+    this.isTelegramMiniApp = this.telegramAuthService.isTelegramMiniApp();
+    
+    if (this.isTelegramMiniApp) {
+      // Initialize Telegram WebApp
+      this.telegramAuthService.initializeTelegramWebApp();
+      // Authenticate Telegram user
+      this.authenticateTelegramUser();
+    } else {
+      // Regular web app flow
+      this.initializeRegularAuth();
+    }
+    
     // Load bot name from localStorage
     this.loadBotName();
     // Load Microsoft access token from localStorage
@@ -70,8 +89,64 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
     this.initializeSpeechRecognition();
     // Initialize Text-to-Speech
     this.initializeTextToSpeech();
-    // Initialize authentication state listener
+  }
+
+  /**
+   * Initialize regular authentication (Google Sign-In)
+   */
+  private initializeRegularAuth(): void {
     this.initializeAuth();
+  }
+
+  /**
+   * Authenticate Telegram user
+   */
+  private authenticateTelegramUser(): void {
+    try {
+      const telegramUser = this.telegramAuthService.getTelegramUser();
+      if (telegramUser) {
+        console.log('Telegram user detected:', telegramUser);
+      }
+
+      this.telegramAuthService.authenticateTelegramUser().subscribe({
+        next: (firebaseUser) => {
+          console.log('✅ Telegram authentication successful:', firebaseUser);
+          this.user = firebaseUser;
+          this.isTelegramAuthenticated = true;
+          
+          // Listen to auth state changes
+          const auth = getFirebaseAuth();
+          if (auth) {
+            onAuthStateChanged(auth, (user) => {
+              this.user = user;
+              this.isTelegramAuthenticated = !!user;
+            });
+          }
+        },
+        error: (error) => {
+          console.error('❌ Telegram authentication failed:', error);
+          this.isTelegramAuthenticated = false;
+          
+          // Show error message to user
+          let errorMessage = 'Không thể xác thực với Telegram. ';
+          
+          if (error.message?.includes('not linked')) {
+            errorMessage += 'Tài khoản Telegram của bạn chưa được liên kết với số điện thoại. Vui lòng liên hệ quản trị viên.';
+          } else if (error.message?.includes('not found')) {
+            errorMessage += 'Số điện thoại của bạn chưa được đăng ký trong hệ thống.';
+          } else if (error.message?.includes('not active')) {
+            errorMessage += 'Tài khoản của bạn đã bị vô hiệu hóa.';
+          } else {
+            errorMessage += error.message || 'Vui lòng thử lại sau.';
+          }
+          
+          alert(errorMessage);
+        }
+      });
+    } catch (error: any) {
+      console.error('Error initializing Telegram authentication:', error);
+      this.isTelegramAuthenticated = false;
+    }
   }
 
   /**
