@@ -428,8 +428,8 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         }
       }
 
-      // Chỉ lưu tối đa 50 messages gần nhất để tránh localStorage quá lớn
-      const messagesToSave = uniqueMessages.slice(-50);
+      // Lưu tối đa 100 messages gần nhất để AI nhớ sâu hơn (tăng từ 50 lên 100)
+      const messagesToSave = uniqueMessages.slice(-100);
       localStorage.setItem('thihi_chat_history', JSON.stringify(messagesToSave));
       console.log('✅ Saved chat history to localStorage:', messagesToSave.length, 'messages (not displayed on UI)');
     } catch (error) {
@@ -549,8 +549,8 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         }
       }
 
-      // Lấy tối đa 20 messages gần nhất để tránh prompt quá dài
-      const recentMessages = allMessages.slice(-20);
+      // Lấy tối đa 50 messages gần nhất để AI nhớ sâu hơn (tăng từ 20 lên 50)
+      const recentMessages = allMessages.slice(-50);
 
       const history = recentMessages.map((msg: any) => ({
         role: msg.role as 'user' | 'assistant',

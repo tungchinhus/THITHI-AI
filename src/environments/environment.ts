@@ -1,6 +1,22 @@
+/**
+ * ⚠️ BẢO MẬT: File này chứa thông tin nhạy cảm
+ * 
+ * LƯU Ý:
+ * - KHÔNG commit file này nếu chứa API keys thực tế
+ * - Sử dụng environment.example.ts làm template
+ * - Firebase Config keys có thể public (được bảo vệ bởi Firebase Security Rules)
+ * - Gemini API key: Sử dụng Firebase Secrets thay vì hardcode ở đây
+ * 
+ * Để sử dụng environment variables trong Angular, cần cấu hình build replacement
+ * hoặc sử dụng file replacement trong angular.json
+ */
+
 export const environment = {
   production: false,
   firebaseConfig: {
+    // ✅ Firebase Config - Đã cập nhật từ Firebase Console
+    // Lấy từ: https://console.firebase.google.com/project/thithi-3e545/settings/general
+    // Lưu ý: Firebase config keys có thể public (được bảo vệ bởi Firebase Security Rules)
     apiKey: "AIzaSyAdKKsicy8uB6Mj2go56UdmnCQ9BUfKBVM",
     authDomain: "thithi-3e545.firebaseapp.com",
     projectId: "thithi-3e545",
@@ -9,19 +25,19 @@ export const environment = {
     appId: "1:106233747074:web:7a5ec1f02fb0728c75469b",
     measurementId: "G-J8TJTMVSR0"
   },
-  // ⚠️ QUAN TRỌNG: Cập nhật URL Firebase Function của bạn
-  // Format: https://REGION-PROJECT_ID.cloudfunctions.net/FUNCTION_NAME
-  // Ví dụ: https://us-central1-thithi-3e545.cloudfunctions.net/chatFunction
-  // Xem file HUONG_DAN_CAU_HINH_FUNCTION.md để biết chi tiết
-  firebaseFunctionUrl: "https://chatfunction-7wmcfqhioa-uc.a.run.app", // Firebase Function v2 URL
-  // Gemini API Key - Lấy từ https://makersuite.google.com/app/apikey
-  geminiApiKey: "", // Thêm API key của bạn vào đây
+  // ✅ Firebase Function URL - Đã cập nhật từ deploy
+  // URL thực tế: https://chatfunction-7wmcfqhioa-uc.a.run.app
+  firebaseFunctionUrl: "https://chatfunction-7wmcfqhioa-uc.a.run.app",
+  
+  // ⚠️ Gemini API Key - KHÔNG hardcode ở đây!
+  // Sử dụng Firebase Secrets: firebase functions:secrets:set GEMINI_API_KEY
+  // API key được xử lý ở backend (Firebase Functions), không cần ở đây
+  geminiApiKey: "",
   
   // Microsoft Outlook Integration
   // Lấy từ Azure AD App Registration: https://portal.azure.com
-  microsoftClientId: "4e8cf90e-655d-4795-9e6d-4bd4353616f3", // Application (client) ID
+  microsoftClientId: "YOUR_MICROSOFT_CLIENT_ID",
   // Tenant ID: "common" = hỗ trợ multi-tenant (bất kỳ Microsoft account nào)
-  // Hoặc dùng specific tenant ID nếu chỉ muốn 1 tenant: "1c94e0b1-63e3-405f-a00a-54f8138b0811"
-  microsoftTenantId: "common" // "common" = multi-tenant, hoặc specific tenant ID
+  // Hoặc dùng specific tenant ID nếu chỉ muốn 1 tenant
+  microsoftTenantId: "common"
 };
-

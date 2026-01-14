@@ -4,7 +4,20 @@
 
 const https = require('https');
 
-const apiKey = process.argv[2] || 'AIzaSyCfLo3bdWBYjPB8XKcYMh62DFKqsmZrIMc';
+// ⚠️ QUAN TRỌNG: KHÔNG hardcode API key trong file này!
+// Sử dụng: node check-api-key.js YOUR_API_KEY
+// Hoặc: echo YOUR_API_KEY | node check-api-key.js
+const apiKey = process.argv[2] || process.env.GEMINI_API_KEY || '';
+
+if (!apiKey) {
+  console.error('❌ Lỗi: Chưa cung cấp API key!');
+  console.error('\n📋 Cách sử dụng:');
+  console.error('   1. node check-api-key.js YOUR_API_KEY');
+  console.error('   2. export GEMINI_API_KEY=YOUR_API_KEY && node check-api-key.js');
+  console.error('   3. echo YOUR_API_KEY | node check-api-key.js');
+  console.error('\n💡 Lấy API key từ: https://makersuite.google.com/app/apikey');
+  process.exit(1);
+}
 
 console.log('='.repeat(60));
 console.log('🔍 KIỂM TRA API KEY VÀ MODELS CÓ SẴN');

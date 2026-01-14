@@ -96,20 +96,76 @@ ${context}
       return `${index + 1}. [${role}]: ${msg.content || ''}`;
     }).join('\n');
     
+    // Tóm tắt thông tin quan trọng từ lịch sử chat (tên, sở thích, yêu cầu đặc biệt)
+    let importantInfoSummary = '';
+    const userMessages = history.filter(msg => msg.role === 'user').map(msg => msg.content || '').join(' ');
+    
+    // Tìm tên người dùng
+    const namePatterns = [
+      /(?:tên|name|tôi là|i am|i'm|my name is)\s+(?:tôi|i|my name is)?\s*[:\-]?\s*([A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ][a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]+(?:\s+[A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ][a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]+)*)/i,
+      /(?:tôi tên|my name|tên của tôi|tên mình)\s+[:\-]?\s*([A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ][a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]+(?:\s+[A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ][a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]+)*)/i
+    ];
+    
+    let extractedName = null;
+    for (const pattern of namePatterns) {
+      const match = userMessages.match(pattern);
+      if (match && match[1]) {
+        extractedName = match[1].trim();
+        break;
+      }
+    }
+    
+    if (extractedName) {
+      importantInfoSummary += `- Tên người dùng: ${extractedName}\n`;
+    }
+    
+    // Tìm sở thích, yêu cầu đặc biệt
+    const preferencePatterns = [
+      /(?:thích|like|prefer|muốn|want|yêu cầu|requirement)\s+([^.!?]+)/gi,
+      /(?:không thích|don't like|dislike|không muốn|don't want)\s+([^.!?]+)/gi
+    ];
+    
+    const preferences = [];
+    for (const pattern of preferencePatterns) {
+      const matches = userMessages.matchAll(pattern);
+      for (const match of matches) {
+        if (match[1] && match[1].trim().length > 3) {
+          preferences.push(match[1].trim());
+        }
+      }
+    }
+    
+    if (preferences.length > 0) {
+      importantInfoSummary += `- Sở thích/Yêu cầu: ${preferences.slice(0, 3).join(', ')}\n`;
+    }
+    
+    if (importantInfoSummary) {
+      importantInfoSummary = `\n📌 TÓM TẮT THÔNG TIN QUAN TRỌNG TỪ LỊCH SỬ CHAT:\n${importantInfoSummary}\n`;
+    }
+    
     historySection = `
 ### 3. LỊCH SỬ CHAT (Để hiểu ngữ cảnh "cái đó", "file vừa rồi", "nó")
-${historyText}
+${importantInfoSummary}${historyText}
 
-⚠️⚠️⚠️ ÁP DỤNG NGUYÊN TẮC "HIỂU NGỮ CẢNH" - QUAN TRỌNG:
-- Nếu user hỏi "nó", "cái đó", "như vậy", "điều đó", "tôi", "bạn", hoặc các đại từ khác, hãy nhìn LỊCH SỬ CHAT ở trên để biết đang nói cái gì.
-- Nếu người dùng đã nói về bất kỳ thông tin gì (tên, sở thích, yêu cầu, v.v.) trong lịch sử chat, bạn PHẢI nhớ và sử dụng thông tin đó khi trả lời.
-- Luôn tham khảo lịch sử chat để trả lời chính xác và có ngữ cảnh. Đừng hỏi lại thông tin đã được cung cấp trước đó.
+🚨🚨🚨 NGUYÊN TẮC "NHỚ SÂU" - CỰC KỲ QUAN TRỌNG:
+1. **NHỚ TẤT CẢ THÔNG TIN QUAN TRỌNG:**
+   - Tên người dùng: Nếu đã được cung cấp trong lịch sử chat, BẮT BUỘC phải sử dụng tên đó trong mọi câu trả lời tiếp theo.
+   - Sở thích, yêu cầu: Nếu người dùng đã nói về sở thích, yêu cầu đặc biệt, PHẢI nhớ và áp dụng.
+   - Thông tin cá nhân: Bất kỳ thông tin nào người dùng đã chia sẻ (công việc, dự án, mối quan tâm), PHẢI nhớ.
 
-🚨🚨🚨 QUAN TRỌNG ĐẶC BIỆT VỀ TÊN NGƯỜI DÙNG:
-- Nếu trong lịch sử chat có thông tin về tên người dùng (ví dụ: "Tên tôi là X", "Tôi là Y", "My name is Z"), bạn PHẢI NHỚ và SỬ DỤNG tên đó trong các câu trả lời tiếp theo.
-- KHÔNG được hỏi lại tên nếu đã được cung cấp trong lịch sử chat.
-- Khi user hỏi "Tôi tên gì?" hoặc "What is my name?", hãy tìm trong LỊCH SỬ CHAT ở trên để tìm câu trả lời.
-- Ví dụ: Nếu trong lịch sử có "Tên tôi là CHINH", thì khi user hỏi "Tôi tên gì?", bạn PHẢI trả lời "Tên bạn là CHINH" (KHÔNG được nói "Tôi không biết").
+2. **HIỂU NGỮ CẢNH SÂU:**
+   - Khi user hỏi "nó", "cái đó", "như vậy", "điều đó", "tôi", "bạn", hoặc các đại từ khác, BẮT BUỘC phải nhìn LỊCH SỬ CHAT ở trên để biết đang nói cái gì.
+   - KHÔNG BAO GIỜ hỏi lại thông tin đã được cung cấp trước đó trong lịch sử chat.
+   - Luôn tham khảo lịch sử chat để trả lời chính xác và có ngữ cảnh.
+
+3. **VÍ DỤ CỤ THỂ:**
+   - Nếu trong lịch sử có "Tên tôi là CHINH" → Khi user hỏi "Tôi tên gì?", PHẢI trả lời "Tên bạn là CHINH" (KHÔNG được nói "Tôi không biết").
+   - Nếu trong lịch sử có "Tôi làm ở phòng IT" → Khi user hỏi "Tôi làm ở đâu?", PHẢI trả lời "Bạn làm ở phòng IT".
+   - Nếu trong lịch sử có "Tôi đang làm dự án X" → Khi user hỏi "Dự án của tôi thế nào?", PHẢI nhớ và trả lời về dự án X.
+
+4. **KHÔNG ĐƯỢC QUÊN:**
+   - Mọi thông tin trong lịch sử chat đều quan trọng và phải được sử dụng khi cần thiết.
+   - Nếu không chắc chắn về thông tin, hãy tìm lại trong LỊCH SỬ CHAT ở trên trước khi trả lời.
 `;
   } else {
     historySection = `
@@ -215,12 +271,28 @@ Bạn KHÔNG được trả lời bằng văn bản thường. Bạn PHẢI tr�
 }
 
 NGUYÊN TẮC "THÔNG MINH":
-1. **Hiểu ngữ cảnh:** Nếu user hỏi "nó", "cái đó", hãy nhìn LỊCH SỬ CHAT để biết đang nói cái gì.
-2. **Nhớ sâu (Cá nhân hóa):** Dựa vào "THÔNG TIN NGƯỜI DÙNG" để điều chỉnh giọng điệu.
+1. **NHỚ SÂU (Ưu tiên cao nhất):** 
+   - PHẢI nhớ TẤT CẢ thông tin quan trọng từ LỊCH SỬ CHAT: tên, sở thích, yêu cầu, công việc, dự án, mối quan tâm.
+   - Sử dụng thông tin đã nhớ trong mọi câu trả lời tiếp theo. KHÔNG BAO GIỜ hỏi lại thông tin đã được cung cấp.
+   - Nếu user hỏi về thông tin đã được chia sẻ trước đó, PHẢI tìm trong LỊCH SỬ CHAT và trả lời chính xác.
+
+2. **Hiểu ngữ cảnh sâu:** 
+   - Nếu user hỏi "nó", "cái đó", "như vậy", "điều đó", "tôi", "bạn", hoặc các đại từ khác, BẮT BUỘC phải nhìn LỊCH SỬ CHAT để biết đang nói cái gì.
+   - Luôn tham khảo lịch sử chat để trả lời chính xác và có ngữ cảnh.
+
+3. **Nhớ sâu (Cá nhân hóa):** 
+   - Dựa vào "THÔNG TIN NGƯỜI DÙNG" và "LỊCH SỬ CHAT" để điều chỉnh giọng điệu và nội dung.
    - Nếu là Sếp/Quản lý: Trả lời súc tích, tập trung vào kết quả, chi phí.
    - Nếu là Nhân viên mới: Giải thích chi tiết, tận tình từng bước.
-3. **Gợi ý chủ động:** Luôn đoán xem user muốn làm gì tiếp theo. Ví dụ: Hỏi về "quy trình công tác" -> Gợi ý "Tải mẫu đơn công tác".
-4. **Trung thực:** Chỉ trả lời dựa trên CONTEXT. Không bịa đặt.
+   - Sử dụng tên người dùng nếu đã biết từ lịch sử chat.
+
+4. **Gợi ý chủ động:** 
+   - Luôn đoán xem user muốn làm gì tiếp theo dựa trên lịch sử chat và ngữ cảnh.
+   - Ví dụ: Hỏi về "quy trình công tác" -> Gợi ý "Tải mẫu đơn công tác".
+
+5. **Trung thực:** 
+   - Chỉ trả lời dựa trên CONTEXT và LỊCH SỬ CHAT. Không bịa đặt.
+   - Nếu không biết, hãy nói rõ và đề xuất cách tìm hiểu thêm.
 
 ⚠️ QUAN TRỌNG VỀ ĐỊNH DẠNG JSON:
 - Bạn PHẢI trả về JSON object, KHÔNG được trả về văn bản thường.
@@ -581,9 +653,9 @@ exports.chatFunction = onRequest(
                 notes: userInfo.notes || 'Thích câu trả lời rõ ràng, đầy đủ'
               } : null;
 
-              // 2. History - Lịch sử chat (chỉ lấy tối đa 20 messages gần nhất)
+              // 2. History - Lịch sử chat (lấy tối đa 50 messages gần nhất để AI nhớ sâu hơn)
               const recentHistory = chatHistory && Array.isArray(chatHistory) && chatHistory.length > 0
-                ? chatHistory.slice(-20)
+                ? chatHistory.slice(-50)
                 : [];
               
               if (recentHistory.length > 0) {

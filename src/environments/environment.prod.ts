@@ -1,25 +1,45 @@
+/**
+ * ⚠️ BẢO MẬT: File này chứa thông tin nhạy cảm cho Production
+ * 
+ * LƯU Ý:
+ * - KHÔNG commit file này nếu chứa API keys thực tế
+ * - Sử dụng environment.example.ts làm template
+ * - Sử dụng environment variables hoặc build-time replacement
+ */
+
 export const environment = {
   production: true,
   firebaseConfig: {
-    apiKey: "AIzaSyAdKKsicy8uB6Mj2go56UdmnCQ9BUfKBVM",
-    authDomain: "thithi-3e545.firebaseapp.com",
-    projectId: "thithi-3e545",
-    storageBucket: "thithi-3e545.firebasestorage.app",
-    messagingSenderId: "106233747074",
-    appId: "1:106233747074:web:7a5ec1f02fb0728c75469b",
-    measurementId: "G-J8TJTMVSR0"
+    // ⚠️ Firebase Config - Có thể public nhưng nên lấy từ environment variable
+    // Lấy từ: https://console.firebase.google.com/project/YOUR_PROJECT/settings/general
+    // Lưu ý: Angular không hỗ trợ process.env trong browser
+    // Sử dụng file replacement trong angular.json để thay thế giá trị khi build
+    apiKey: "YOUR_FIREBASE_API_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT.appspot.com",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID",
+    measurementId: "YOUR_MEASUREMENT_ID"
   },
   // ⚠️ QUAN TRỌNG: Cập nhật URL Firebase Function của bạn
   // Format: https://REGION-PROJECT_ID.cloudfunctions.net/FUNCTION_NAME
   // Ví dụ: https://us-central1-thithi-3e545.cloudfunctions.net/chatFunction
   // Xem file HUONG_DAN_CAU_HINH_FUNCTION.md để biết chi tiết
-  firebaseFunctionUrl: "https://chatfunction-7wmcfqhioa-uc.a.run.app", // Firebase Function v2 URL
-  // Gemini API Key - Lấy từ https://makersuite.google.com/app/apikey
-  geminiApiKey: "", // Thêm API key của bạn vào đây
+  // Lưu ý: Angular không hỗ trợ process.env trong browser
+  // Sử dụng file replacement trong angular.json để thay thế giá trị khi build
+  firebaseFunctionUrl: "YOUR_FIREBASE_FUNCTION_URL",
+  
+  // ⚠️ Gemini API Key - KHÔNG hardcode ở đây!
+  // Sử dụng Firebase Secrets: firebase functions:secrets:set GEMINI_API_KEY
+  // API key được xử lý ở backend (Firebase Functions), không cần ở đây
+  geminiApiKey: "",
   
   // Microsoft Outlook Integration
   // Lấy từ Azure AD App Registration: https://portal.azure.com
-  microsoftClientId: "4e8cf90e-655d-4795-9e6d-4bd4353616f3", // Application (client) ID
-  microsoftTenantId: "1c94e0b1-63e3-405f-a00a-54f8138b0811" // Directory (tenant) ID
+  // Lưu ý: Angular không hỗ trợ process.env trong browser
+  // Sử dụng file replacement trong angular.json để thay thế giá trị khi build
+  microsoftClientId: "YOUR_MICROSOFT_CLIENT_ID",
+  microsoftTenantId: "YOUR_MICROSOFT_TENANT_ID"
 };
 

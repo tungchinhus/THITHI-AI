@@ -11,6 +11,21 @@ dist/
 .env
 .env.local
 .env.*.local
+*.env
+
+# Files có thể chứa API keys (không commit)
+# ⚠️ QUAN TRỌNG: Các file này có thể chứa API keys nhạy cảm
+*-api-key.js
+*-secret.js
+*credentials*.js
+*config*.local.js
+
+# Environment config files với API keys thực tế
+# Chỉ commit file .example.ts, không commit file có keys thực
+# src/environments/environment.ts (nếu chứa keys thực)
+# src/environments/environment.prod.ts (nếu chứa keys thực)
+# Lưu ý: Nếu muốn commit file environment với keys thực, xóa dòng này
+# Nhưng KHÔNG BAO GIỜ commit Gemini API keys hoặc các keys nhạy cảm khác
 
 # Firebase
 .firebase/

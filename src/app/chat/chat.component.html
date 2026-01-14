@@ -151,7 +151,7 @@
   <main 
     #messagesContainer
     class="flex-1 overflow-y-auto p-4 scroll-smooth"
-    style="background-color: #ffffff; padding-bottom: 1rem; padding-left: 0.75rem; padding-right: 0.75rem;"
+    style="background-color: #ffffff; padding-left: 0.75rem; padding-right: 0.75rem;"
   >
     <!-- Messages -->
     <div *ngFor="let message of messages" class="flex items-end mb-4" [ngClass]="message.role === 'user' ? 'justify-end' : 'justify-start'" style="margin-bottom: 1rem;">
@@ -323,7 +323,7 @@
   <!-- Input Area - Fixed at Bottom -->
   <footer 
     class="bg-white border-t"
-    style="background-color: #ffffff; border-top: 1px solid #e5e7eb; position: sticky; bottom: 0; z-index: 10; width: 100%;"
+    style="background-color: #ffffff; border-top: 1px solid #e5e7eb; position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; width: 100%;"
   >
     <form (ngSubmit)="sendMessage()" style="width: 100%; padding: 0.75rem; box-sizing: border-box;">
       <div style="display: flex; align-items: flex-end; gap: 0.5rem; width: 100%;">

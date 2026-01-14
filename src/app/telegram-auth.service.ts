@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, from } from 'rxjs';
 import { map, switchMap } from 'rxjs/operators';
-import { environment } from '../../environments/environment';
+import { environment } from '../environments/environment';
 import { getFirebaseAuth } from './firebase.config';
 import { signInWithCustomToken, User } from 'firebase/auth';
 
@@ -37,7 +37,7 @@ export class TelegramAuthService {
    * Get Telegram WebApp instance
    */
   getTelegramWebApp(): any {
-    if (this.isTelegramMiniApp()) {
+    if (this.isTelegramMiniApp() && window.Telegram && window.Telegram.WebApp) {
       return window.Telegram.WebApp;
     }
     return null;
