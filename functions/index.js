@@ -9,6 +9,17 @@ const pdfParse = require("pdf-parse");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 
+// SQL Server integration (optional - only if SQL_SERVER_HOST is configured)
+let sqlConnection = null;
+let sqlTSMayService = null;
+try {
+  sqlConnection = require('./sql-connection');
+  sqlTSMayService = require('./sql-tsmay-service');
+  console.log('✅ SQL Server modules loaded');
+} catch (error) {
+  console.warn('⚠️ SQL Server modules not available (optional):', error.message);
+}
+
 // Initialize Firebase Admin if not already initialized
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -294,6 +305,15 @@ NGUYÊN TẮC "THÔNG MINH":
    - Chỉ trả lời dựa trên CONTEXT và LỊCH SỬ CHAT. Không bịa đặt.
    - Nếu không biết, hãy nói rõ và đề xuất cách tìm hiểu thêm.
 
+6. **Xử lý dữ liệu TSMay thông minh:**
+   - Khi có dữ liệu TSMay trong CONTEXT, PHẢI sử dụng dữ liệu đó để trả lời chính xác.
+   - Hiểu rõ các field quan trọng: kVA (công suất), Soá maùy/Số máy (số máy), LSX, SBB, TBKT (mã), Kieåu maùy/Kiểu máy (kiểu máy), Ngaøy XX/Ngày XX (ngày), v.v.
+   - Khi user hỏi "xem chi tiết" hoặc "hiển thị đầy đủ", PHẢI liệt kê TẤT CẢ các field có trong dữ liệu tìm được, không chỉ một vài field.
+   - Format dữ liệu rõ ràng: sử dụng bảng, danh sách có dấu đầu dòng, hoặc format markdown để dễ đọc.
+   - Nếu tìm thấy nhiều bản ghi, hãy tóm tắt và so sánh các điểm chính.
+   - Khi user hỏi về một mã cụ thể (ví dụ: "24142TJ"), PHẢI tìm trong dữ liệu và hiển thị TẤT CẢ thông tin liên quan đến mã đó.
+   - **TÍNH TOÁN THỐNG KÊ:** Khi user yêu cầu tính toán thống kê (độ lệch chuẩn, trung bình, trung vị, phương sai, min, max, tổng), hệ thống đã tự động tính toán và cung cấp kết quả trong CONTEXT. Bạn PHẢI sử dụng kết quả tính toán đó để trả lời trực tiếp cho user, KHÔNG được nói rằng bạn không thể tính toán.
+
 ⚠️ QUAN TRỌNG VỀ ĐỊNH DẠNG JSON:
 - Bạn PHẢI trả về JSON object, KHÔNG được trả về văn bản thường.
 - JSON phải có đầy đủ 4 fields: analysis, answer, citations, suggestions.
@@ -474,6 +494,101 @@ exports.chatFunction = onRequest(
           isFileRelatedQuestion,
           shouldSearchOneDrive,
           reason: !microsoftAccessToken ? 'No token' : 'Not file/OneDrive question'
+        });
+        // #endregion
+      }
+      
+      // ============================================
+      // Xử lý câu hỏi về TSMay (Firestore collection)
+      // ============================================
+      let tsMayContext = '';
+      // #region agent log
+      const isTSMayQuestion = isTSMayRelatedQuestion(question);
+      const isStatisticalCalc = isStatisticalCalculationQuestion(question);
+      console.log('📊 TSMay question check:', {
+        question: question.substring(0, 50),
+        isTSMayQuestion,
+        isStatisticalCalc
+      });
+      // #endregion
+      
+      // If it's a statistical calculation question, use calculation function
+      if (isStatisticalCalc) {
+        try {
+          // #region agent log
+          console.log('📊 Calling calculateTSMayStatistics...', {
+            question: question.substring(0, 50)
+          });
+          // #endregion
+          tsMayContext = await calculateTSMayStatistics(question);
+          // #region agent log
+          console.log('📊 calculateTSMayStatistics result:', {
+            hasTSMayContext: !!tsMayContext,
+            tsMayContextLength: tsMayContext?.length || 0,
+            tsMayContextPreview: tsMayContext?.substring(0, 100) || 'null'
+          });
+          // #endregion
+          if (tsMayContext) {
+            console.log('📊 Found TSMay calculation result:', tsMayContext.substring(0, 200));
+          }
+        } catch (calcError) {
+          // #region agent log
+          console.error('❌ Error calculating TSMay statistics:', {
+            error: calcError.message,
+            errorStack: calcError.stack?.substring(0, 500)
+          });
+          // #endregion
+          
+          // If calculation fails, set tsMayContext to detailed error message for AI
+          const errorMsg = calcError.message || 'Unknown error';
+          tsMayContext = `**LỖI KHI TÍNH TOÁN THỐNG KÊ:**
+          
+Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nhưng gặp lỗi: ${errorMsg}
+
+**Nguyên nhân có thể:**
+- Dữ liệu TSMay chưa được import hoặc collection trống
+- Field được yêu cầu không tồn tại trong dữ liệu
+- Dữ liệu không có giá trị số hợp lệ để tính toán
+- Lỗi kết nối với Firestore
+
+**Hướng dẫn cho AI:** Hãy thông báo lỗi này cho người dùng một cách rõ ràng và đề xuất các giải pháp thay thế như sử dụng Excel hoặc kiểm tra lại dữ liệu TSMay.`;
+        }
+      } else if (isTSMayQuestion) {
+        try {
+          // #region agent log
+          console.log('📊 Calling searchTSMayData...', {
+            question: question.substring(0, 50)
+          });
+          // #endregion
+          tsMayContext = await searchTSMayData(question);
+          // #region agent log
+          console.log('📊 searchTSMayData result:', {
+            hasTSMayContext: !!tsMayContext,
+            tsMayContextLength: tsMayContext?.length || 0,
+            tsMayContextPreview: tsMayContext?.substring(0, 100) || 'null'
+          });
+          // #endregion
+          if (tsMayContext) {
+            console.log('📊 Found TSMay context:', tsMayContext.substring(0, 200));
+          }
+        } catch (tsMayError) {
+          // #region agent log
+          console.error('❌ Error searching TSMay:', {
+            error: tsMayError.message,
+            errorStack: tsMayError.stack?.substring(0, 200)
+          });
+          // #endregion
+          
+          // If TSMay search fails, set tsMayContext to error message
+          const errorMsg = tsMayError.message || 'Unknown error';
+          tsMayContext = `Lỗi khi tìm kiếm dữ liệu TSMay: ${errorMsg}`;
+        }
+      } else {
+        // #region agent log
+        console.log('⚠️ Skipping TSMay search:', {
+          isTSMayQuestion,
+          isStatisticalCalc,
+          reason: 'Not TSMay question or calculation'
         });
         // #endregion
       }
@@ -664,7 +779,7 @@ exports.chatFunction = onRequest(
                 console.log('⚠️ No chat history provided');
               }
 
-              // 3. Context - Kết hợp email và OneDrive context
+              // 3. Context - Kết hợp email, OneDrive và TSMay context
               let combinedContext = '';
               if (emailContext) {
                 combinedContext += `📧 THÔNG TIN EMAIL TỪ OUTLOOK:\n${emailContext}\n\nKhi người dùng hỏi về email, hãy sử dụng thông tin email ở trên để trả lời. Nếu không tìm thấy email phù hợp, hãy thông báo rõ ràng.\n\n`;
@@ -675,9 +790,58 @@ exports.chatFunction = onRequest(
                 combinedContext += `📁 THÔNG TIN TỪ ONEDRIVE:\n${oneDriveContext}\n\nKhi người dùng hỏi về file hoặc tài liệu trong OneDrive, hãy sử dụng thông tin ở trên để trả lời. Nếu cần tóm tắt nội dung file, hãy làm ngắn gọn và thông minh.\n\n`;
                 console.log('✅ OneDrive context prepared for prompt:', oneDriveContext.substring(0, 200));
               }
+              
+              if (tsMayContext) {
+                combinedContext += `📊 THÔNG TIN TỪ TSMay (Dữ liệu Excel đã import):\n${tsMayContext}\n\n**HƯỚNG DẪN XỬ LÝ DỮ LIỆU TSMay:**
+- Dữ liệu TSMay chứa thông tin về máy biến áp/transformer với các field quan trọng:
+  * **kVA**: Công suất máy biến áp
+  * **Soá maùy/Số máy**: Số máy/serial number (ví dụ: T00035999, 212320063)
+  * **LSX**: Mã LSX (ví dụ: 2081001453, 50000109)
+  * **SBB**: Mã SBB (ví dụ: 2130493, 2533132)
+  * **TBKT**: Mã TBKT (ví dụ: 24142TJ, 25076D, 20162D)
+  * **T.Chuaån LSX**: Tiêu chuẩn LSX (ví dụ: DLVN-62, DLTP-T53/20)
+  * **Kieåu maùy/Kiểu máy**: Kiểu máy (ví dụ: ONAN-320-ST-WST-BR-RT)
+  * **Po (W)**: Công suất không tải (Watts)
+  * **Io (%)**: Dòng điện không tải (%)
+  * **Pk75 (W)**: Công suất ngắn mạch ở 75°C (Watts)
+  * **Uk75 (%)**: Điện áp ngắn mạch ở 75°C (%)
+  * **Uñm HV/Uđm HV**: Điện áp định mức cao áp (thường là 22)
+  * **LV**: Điện áp thấp (thường là 0.4)
+  * **Ngaøy XX/Ngày XX**: Ngày (format DD/MM/YYYY)
+  * **BNC**: Mã BNC (ví dụ: WST, CAP, MR)
+  * **Daàu**: Loại dầu (ví dụ: POWEROIL, Supertrans, Nynas-N.Ge)
+
+- Khi người dùng hỏi về dữ liệu TSMay:
+  1. PHẢI sử dụng dữ liệu ở trên để trả lời chính xác
+  2. Nếu tìm thấy bản ghi, hiển thị ĐẦY ĐỦ tất cả các field, không chỉ một vài field
+  3. Format dữ liệu rõ ràng, dễ đọc (sử dụng markdown, bảng, danh sách)
+  4. Nếu user hỏi "xem chi tiết" hoặc "hiển thị đầy đủ", PHẢI liệt kê TẤT CẢ các field
+  5. So sánh và tóm tắt nếu có nhiều bản ghi
+  6. Sử dụng tên field gốc (không dùng tên sanitized như col_3, col_20)
+
+- **TÍNH TOÁN THỐNG KÊ:** Hệ thống có thể tính toán các chỉ số thống kê từ dữ liệu TSMay:
+  * Độ lệch chuẩn (standard deviation)
+  * Trung bình (mean/average)
+  * Trung vị (median)
+  * Phương sai (variance)
+  * Giá trị nhỏ nhất (min)
+  * Giá trị lớn nhất (max)
+  * Tổng (sum)
+  Khi user yêu cầu tính toán, hệ thống đã tự động thực hiện và cung cấp kết quả. Bạn PHẢI sử dụng kết quả đó để trả lời trực tiếp.
+
+- **PHÂN TÍCH VÀ ĐẾM DỮ LIỆU:** Hệ thống có thể đếm, nhóm và phân tích dữ liệu TSMay:
+  * Đếm số lượng bản ghi: "có bao nhiêu", "how many", "tổng số"
+  * Đếm số lượng distinct: "có bao nhiêu số máy", "có bao nhiêu LSX khác nhau"
+  * Lọc và đếm: "có bao nhiêu số máy trong TBKT 20161D", "có bao nhiêu bản ghi với LSX 2081001453"
+  * Nhóm dữ liệu: "nhóm theo TBKT", "thống kê theo LSX"
+  Khi user hỏi về số lượng hoặc yêu cầu đếm, hệ thống đã tự động phân tích và cung cấp kết quả trong CONTEXT. Bạn PHẢI sử dụng kết quả đó để trả lời trực tiếp, KHÔNG được nói rằng bạn không thể đếm hoặc không có quyền truy cập.
+
+- Nếu không tìm thấy dữ liệu phù hợp, hãy nói rõ và đề xuất cách tìm kiếm khác.\n\n`;
+                console.log('✅ TSMay context prepared for prompt:', tsMayContext.substring(0, 200));
+              }
 
               if (!combinedContext) {
-                combinedContext = 'Không có tài liệu tham khảo từ email hoặc OneDrive.';
+                combinedContext = 'Không có tài liệu tham khảo từ email, OneDrive hoặc TSMay.';
               }
 
               // 4. UserQuery - Câu hỏi của user
@@ -978,6 +1142,1251 @@ function isEmailRelatedQuestion(question) {
   });
   // #endregion
   return isEmail;
+}
+
+/**
+ * Helper function: Check if question is related to TSMay data
+ * Also detects questions about LSX, SBB, TBKT, Soá maùy (số máy), etc.
+ */
+function isTSMayRelatedQuestion(question) {
+  if (!question || typeof question !== 'string') {
+    return false;
+  }
+  const tsMayKeywords = [
+    'tsmay', 'ts may', 'tìm tsmay', 'tìm ts may',
+    'dữ liệu tsmay', 'du lieu tsmay', 'dữ liệu ts may', 'du lieu ts may',
+    'excel tsmay', 'excel ts may', 'bảng tsmay', 'bang tsmay',
+    'bảng ts may', 'bang ts may', 'import tsmay', 'import ts may',
+    'dữ liệu excel', 'du lieu excel', 'bảng excel', 'bang excel',
+    'tìm trong tsmay', 'tìm trong ts may', 'trong tsmay', 'trong ts may',
+    'có tsmay', 'co tsmay', 'có ts may', 'co ts may',
+    'liệt kê tsmay', 'liet ke tsmay', 'liệt kê ts may', 'liet ke ts may',
+    'danh sách tsmay', 'danh sach tsmay', 'danh sách ts may', 'danh sach ts may'
+  ];
+  
+  // Keywords for TSMay data fields (LSX, SBB, TBKT, số máy, etc.)
+  const tsMayFieldKeywords = [
+    'lsx', 'sbb', 'tbkt', 'soá maùy', 'so may', 'soá may', 'so may',
+    'số máy', 'số may', 'so may', 'maùy', 'may',
+    'kieåu maùy', 'kieu may', 'kiểu máy', 'kieu may',
+    't.chuaån lsx', 't.chuan lsx', 't chuan lsx', 'tieu chuan lsx',
+    'po', 'io', 'pk75', 'uk75', 'udm hv', 'lv', 'udm daáu do',
+    'dau', 'ngaøy xx', 'ngay xx', 'ngày xx', 'bnc',
+    'tìm tbkt', 'tim tbkt', 'tìm trong tbkt', 'tim trong tbkt',
+    'có tbkt', 'co tbkt', 'tbkt nào', 'tbkt nao'
+  ];
+  
+  const lowerQuestion = question.toLowerCase();
+  // Normalize: remove diacritics for better matching
+  const normalizedQuestion = lowerQuestion
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  
+  // Check for TSMay keywords
+  const matchedKeywords = tsMayKeywords.filter(k => {
+    const normalizedKeyword = k.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return normalizedQuestion.includes(normalizedKeyword);
+  });
+  
+  // Check for TSMay field keywords (LSX, SBB, etc.)
+  const matchedFieldKeywords = tsMayFieldKeywords.filter(k => {
+    const normalizedKeyword = k.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return normalizedQuestion.includes(normalizedKeyword);
+  });
+  
+  // Check if question contains a long number (likely a code like LSX 2081001453)
+  // Pattern: "LSX" or "lsx" followed by a number, or just a long number (10+ digits)
+  const hasLSXPattern = /lsx\s*\d{6,}/i.test(question) || /\d{10,}/.test(question);
+  
+  // Check if question asks "có ... nào" (is there any ...) with a code
+  const hasCodePattern = /có\s+[a-z]{2,}\s*\d+/.test(normalizedQuestion) || 
+                         /co\s+[a-z]{2,}\s*\d+/.test(normalizedQuestion);
+  
+  // Check for TBKT pattern: alphanumeric codes like "24142TJ", "25076D" (numbers + letters)
+  // Pattern: 4-6 digits followed by 1-3 letters (e.g., "24142TJ", "25076D")
+  const hasTBKTPattern = /\d{4,6}[a-z]{1,3}/i.test(question);
+  
+  // Check if question mentions "TBKT" or "tbkt" explicitly
+  const hasTBKTKeyword = /tbkt/i.test(question);
+  
+  // Check if question asks "tìm ... trong TBKT" or "tìm ... trong tbkt"
+  const hasTBKTSearchPattern = /tìm\s+[^\s]+\s+trong\s+tbkt/i.test(question) ||
+                                /tim\s+[^\s]+\s+trong\s+tbkt/i.test(question);
+  
+  const isTSMay = matchedKeywords.length > 0 || 
+                  matchedFieldKeywords.length > 0 || 
+                  hasLSXPattern || 
+                  hasCodePattern ||
+                  hasTBKTPattern ||
+                  hasTBKTKeyword ||
+                  hasTBKTSearchPattern;
+  
+  // #region agent log
+  console.log('🔍 isTSMayRelatedQuestion:', {
+    question: question.substring(0, 50),
+    lowerQuestion: lowerQuestion.substring(0, 50),
+    normalizedQuestion: normalizedQuestion.substring(0, 50),
+    isTSMay,
+    matchedKeywords,
+    matchedFieldKeywords,
+    hasLSXPattern,
+    hasCodePattern,
+    hasTBKTPattern,
+    hasTBKTKeyword,
+    hasTBKTSearchPattern
+  });
+  // #endregion
+  return isTSMay;
+}
+
+/**
+ * Helper function: Generate embedding vector using Gemini
+ * @param {string} text - Text to generate embedding for
+ * @returns {Promise<number[]>} Embedding vector
+ */
+async function generateEmbedding(text) {
+  try {
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    if (!geminiApiKey) {
+      throw new Error('GEMINI_API_KEY not configured');
+    }
+
+    // Gemini embedding API endpoint
+    // Note: Gemini uses text-embedding-004 model
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${geminiApiKey}`;
+    
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'models/text-embedding-004',
+        content: {
+          parts: [{
+            text: text
+          }]
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini embedding API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    
+    if (!data.embedding || !data.embedding.values) {
+      throw new Error('Invalid embedding response from Gemini');
+    }
+
+    return data.embedding.values;
+  } catch (error) {
+    console.error('❌ Error generating embedding:', error);
+    throw error;
+  }
+}
+
+/**
+ * Helper function: Calculate cosine similarity between two vectors
+ * @param {number[]} vec1 - First vector
+ * @param {number[]} vec2 - Second vector
+ * @returns {number} Cosine similarity (0-1, higher is more similar)
+ */
+function cosineSimilarity(vec1, vec2) {
+  if (vec1.length !== vec2.length) {
+    throw new Error('Vectors must have the same length');
+  }
+
+  let dotProduct = 0;
+  let norm1 = 0;
+  let norm2 = 0;
+
+  for (let i = 0; i < vec1.length; i++) {
+    dotProduct += vec1[i] * vec2[i];
+    norm1 += vec1[i] * vec1[i];
+    norm2 += vec2[i] * vec2[i];
+  }
+
+  norm1 = Math.sqrt(norm1);
+  norm2 = Math.sqrt(norm2);
+
+  if (norm1 === 0 || norm2 === 0) {
+    return 0;
+  }
+
+  return dotProduct / (norm1 * norm2);
+}
+
+/**
+ * Helper function: Create text representation of TSMay document for embedding
+ * @param {Object} doc - Document data
+ * @returns {string} Text representation
+ */
+function createDocumentText(doc) {
+  const displayData = doc._originalData || doc;
+  const parts = [];
+  
+  // Add important fields first
+  const importantFields = [
+    'kVA', 'Soá maùy', 'Số máy', 'SBB', 'LSX', 'TBKT', 
+    'T.Chuaån LSX', 'T.Chuẩn LSX', 'Kieåu maùy', 'Kiểu máy',
+    'Po (W)', 'Io (%)', 'Pk75 (W)', 'Uk75 (%)', 
+    'Uñm HV', 'Uđm HV', 'LV', 'Ngaøy XX', 'Ngày XX', 'BNC'
+  ];
+  
+  // Add important fields
+  importantFields.forEach(fieldName => {
+    const fieldKey = Object.keys(displayData).find(key => 
+      key.toLowerCase().replace(/\s+/g, '') === fieldName.toLowerCase().replace(/\s+/g, '') ||
+      key === fieldName
+    );
+    
+    if (fieldKey && displayData[fieldKey] !== null && displayData[fieldKey] !== undefined) {
+      const value = displayData[fieldKey];
+      if (value !== '' && value !== null && value !== undefined) {
+        parts.push(`${fieldKey}: ${value}`);
+      }
+    }
+  });
+  
+  // Add other fields
+  Object.keys(displayData).forEach(key => {
+    if (key.startsWith('_') || key === 'id') return;
+    
+    const isImportant = importantFields.some(field => 
+      key.toLowerCase().replace(/\s+/g, '') === field.toLowerCase().replace(/\s+/g, '') ||
+      key === field
+    );
+    
+    if (!isImportant && displayData[key] !== null && displayData[key] !== undefined) {
+      const value = displayData[key];
+      if (value !== '' && value !== null && value !== undefined) {
+        parts.push(`${key}: ${value}`);
+      }
+    }
+  });
+  
+  return parts.join(', ');
+}
+
+/**
+ * Helper function: Check if document matches text search terms
+ * @param {Object} doc - Document to check
+ * @param {string[]} searchTerms - Search terms
+ * @returns {boolean} True if document matches
+ */
+function checkTextMatch(doc, searchTerms) {
+  const priorityFields = [
+    'lsx', 'sbb', 'tbkt', 
+    'soá_maùy', 'so_may', 'so_may', 'số_máy', 'soá_may', 'so_máy',
+    'maùy', 'may', 'máy',
+    'kieåu_maùy', 'kieu_may', 'kiểu_máy', 'kieu_máy',
+    't_chuaån_lsx', 't_chuan_lsx', 'tieu_chuan_lsx', 't_chuẩn_lsx',
+    'soá maùy', 'so may', 'số máy', 'kiểu máy', 't.chuaån lsx'
+  ];
+  
+  for (const term of searchTerms) {
+    const lowerTerm = term.toLowerCase().trim();
+    
+    // Check in priority fields first
+    for (const field of priorityFields) {
+      const fieldValue = doc[field];
+      if (fieldValue !== null && fieldValue !== undefined) {
+        const fieldValueStr = String(fieldValue).toLowerCase();
+        if (fieldValueStr === lowerTerm || fieldValueStr.includes(lowerTerm) || 
+            lowerTerm.includes(fieldValueStr)) {
+          return true;
+        }
+      }
+    }
+    
+    // Also check in all fields (case-insensitive)
+    for (const key in doc) {
+      if (key === 'id' || key.startsWith('_')) continue;
+      const value = doc[key];
+      if (value !== null && value !== undefined) {
+        const valueStr = String(value).toLowerCase();
+        const valueStrNoSpace = valueStr.replace(/\s+/g, '');
+        const termNoSpace = lowerTerm.replace(/\s+/g, '');
+        
+        if (valueStr === lowerTerm || valueStr.includes(lowerTerm) || 
+            lowerTerm.includes(valueStr) ||
+            valueStrNoSpace === termNoSpace || valueStrNoSpace.includes(termNoSpace) ||
+            termNoSpace.includes(valueStrNoSpace)) {
+          return true;
+        }
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Helper function: Check if question is asking for counting/aggregation
+ * Examples: "có bao nhiêu", "how many", "đếm", "count", "tổng số"
+ */
+function isAggregationQuestion(question) {
+  if (!question || typeof question !== 'string') {
+    return false;
+  }
+  
+  const lowerQuestion = question.toLowerCase();
+  const normalizedQuestion = lowerQuestion
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  
+  const aggregationKeywords = [
+    'co bao nhieu', 'có bao nhiêu', 'bao nhieu', 'bao nhiêu',
+    'how many', 'how much', 'count', 'dem', 'đếm',
+    'tong so', 'tổng số', 'total', 'tat ca', 'tất cả',
+    'list', 'danh sach', 'danh sách', 'liet ke', 'liệt kê',
+    'nhom', 'nhóm', 'group', 'theo', 'by'
+  ];
+  
+  return aggregationKeywords.some(keyword => {
+    const normalizedKeyword = keyword.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return normalizedQuestion.includes(normalizedKeyword);
+  });
+}
+
+/**
+ * Helper function: Perform aggregation on TSMay data
+ * Supports: count, count distinct, group by, filter and count
+ */
+function performAggregation(documents, question) {
+  if (!documents || documents.length === 0) {
+    return {
+      type: 'count',
+      result: 0,
+      message: 'Không có dữ liệu để phân tích.'
+    };
+  }
+  
+  const lowerQuestion = question.toLowerCase();
+  const normalizedQuestion = lowerQuestion
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  
+  // Extract filter criteria (e.g., "TBKT 20161D", "LSX 2081001453")
+  const tbktPattern = /tbkt\s*([a-z0-9]+)/i;
+  const lsxPattern = /lsx\s*(\d+)/i;
+  const sbbPattern = /sbb\s*(\d+)/i;
+  const soMayPattern = /(?:so|số)\s*(?:may|máy|maùy|maùy)\s*([a-z0-9]+)/i;
+  
+  let filterField = null;
+  let filterValue = null;
+  
+  const tbktMatch = question.match(tbktPattern);
+  if (tbktMatch) {
+    filterField = 'TBKT';
+    filterValue = tbktMatch[1].toUpperCase();
+  }
+  
+  const lsxMatch = question.match(lsxPattern);
+  if (lsxMatch) {
+    filterField = 'LSX';
+    filterValue = lsxMatch[1];
+  }
+  
+  const sbbMatch = question.match(sbbPattern);
+  if (sbbMatch) {
+    filterField = 'SBB';
+    filterValue = sbbMatch[1];
+  }
+  
+  // Extract what to count (e.g., "số máy", "máy", "số lượng")
+  let countField = null;
+  if (/so|số|số lượng|quantity|count/i.test(question)) {
+    if (/may|máy|maùy|machine/i.test(question)) {
+      countField = 'Soá maùy'; // or 'Số máy'
+    }
+  }
+  
+  // Filter documents based on criteria
+  let filteredDocs = documents;
+  if (filterField && filterValue) {
+    filteredDocs = documents.filter(doc => {
+      const displayData = doc._originalData || doc;
+      
+      // Try to find the field (case-insensitive, with/without spaces)
+      const fieldKey = Object.keys(displayData).find(key => {
+        const keyNormalized = key.toLowerCase().replace(/\s+/g, '');
+        const filterFieldNormalized = filterField.toLowerCase().replace(/\s+/g, '');
+        return keyNormalized === filterFieldNormalized || 
+               keyNormalized.includes(filterFieldNormalized) ||
+               filterFieldNormalized.includes(keyNormalized);
+      });
+      
+      if (fieldKey) {
+        const fieldValue = String(displayData[fieldKey] || '').toUpperCase().replace(/\s+/g, '');
+        const filterValueNormalized = filterValue.toUpperCase().replace(/\s+/g, '');
+        return fieldValue === filterValueNormalized || 
+               fieldValue.includes(filterValueNormalized) ||
+               filterValueNormalized.includes(fieldValue);
+      }
+      
+      return false;
+    });
+  }
+  
+  // Count based on what user asked
+  let result = 0;
+  let resultMessage = '';
+  
+  if (countField) {
+    // Count distinct values of a specific field
+    const distinctValues = new Set();
+    filteredDocs.forEach(doc => {
+      const displayData = doc._originalData || doc;
+      const fieldKey = Object.keys(displayData).find(key => {
+        const keyNormalized = key.toLowerCase().replace(/\s+/g, '');
+        const countFieldNormalized = countField.toLowerCase().replace(/\s+/g, '');
+        return keyNormalized === countFieldNormalized || 
+               keyNormalized.includes(countFieldNormalized);
+      });
+      
+      if (fieldKey && displayData[fieldKey]) {
+        const value = String(displayData[fieldKey]).trim();
+        if (value) {
+          distinctValues.add(value);
+        }
+      }
+    });
+    result = distinctValues.size;
+    resultMessage = `Có **${result}** ${countField} ${filterField && filterValue ? `trong ${filterField} ${filterValue}` : ''}`;
+  } else {
+    // Simple count of documents
+    result = filteredDocs.length;
+    if (filterField && filterValue) {
+      resultMessage = `Có **${result}** bản ghi với ${filterField} = ${filterValue}`;
+    } else {
+      resultMessage = `Tổng số bản ghi: **${result}**`;
+    }
+  }
+  
+  return {
+    type: 'aggregation',
+    result,
+    message: resultMessage,
+    filteredCount: filteredDocs.length,
+    totalCount: documents.length,
+    filterCriteria: filterField && filterValue ? { field: filterField, value: filterValue } : null,
+    sampleData: filteredDocs.slice(0, 5).map(doc => {
+      const displayData = doc._originalData || doc;
+      return {
+        id: doc.id,
+        ...displayData
+      };
+    })
+  };
+}
+
+/**
+ * Helper function: Search TSMay data (Firestore or SQL Server)
+ */
+async function searchTSMayData(question) {
+  try {
+    // #region agent log
+    console.log('🔍 searchTSMayData started:', {
+      question: question.substring(0, 50),
+      useSQL: !!sqlTSMayService && !!process.env.SQL_SERVER_HOST
+    });
+    // #endregion
+    
+    // Try SQL Server first if configured
+    if (sqlTSMayService && process.env.SQL_SERVER_HOST) {
+      try {
+        console.log('📊 Using SQL Server for TSMay search...');
+        const sqlResult = await sqlTSMayService.searchTSMayWithVector(question, {
+          similarityThreshold: 0.3,
+          topN: 10
+        });
+        
+        if (sqlResult.records && sqlResult.records.length > 0) {
+          // Format SQL results similar to Firestore format
+          let tsMayContext = `Tìm thấy ${sqlResult.totalFound} bản ghi trong TSMay (SQL Server):\n\n`;
+          
+          sqlResult.records.forEach((record, index) => {
+            tsMayContext += `**Bản ghi ${index + 1}** (ID: ${record.DocumentId}, Similarity: ${(record.similarity * 100).toFixed(2)}%):\n`;
+            
+            const data = record.data || {};
+            Object.keys(data).forEach(key => {
+              if (key && data[key] !== null && data[key] !== undefined) {
+                tsMayContext += `  - **${key}**: ${data[key]}\n`;
+              }
+            });
+            tsMayContext += `\n`;
+          });
+          
+          return tsMayContext;
+        }
+      } catch (sqlError) {
+        console.warn('⚠️ SQL Server search failed, falling back to Firestore:', sqlError.message);
+        // Fall through to Firestore search
+      }
+    }
+    
+    // Fallback to Firestore search
+    return await searchTSMayDataFirestore(question);
+  } catch (error) {
+    console.error('❌ Error in searchTSMayData:', error);
+    throw error;
+  }
+}
+
+/**
+ * Helper function: Search TSMay data in Firestore (original implementation)
+ */
+async function searchTSMayDataFirestore(question) {
+  try {
+    // #region agent log
+    console.log('🔍 searchTSMayDataFirestore started:', {
+      question: question.substring(0, 50)
+    });
+    // #endregion
+    
+    // Extract search terms from question
+    const searchTerms = extractTSMaySearchTerms(question);
+    
+    // Get TSMay collection from Firestore
+    const tsMayRef = db.collection('TSMay');
+    let query = tsMayRef;
+    
+    // Increase limit to 500 documents for better search coverage
+    // If search terms are provided, we'll filter in memory
+    query = query.limit(500);
+    
+    // Execute query
+    const snapshot = await query.get();
+    
+    // Try semantic search with vector embeddings
+    let useSemanticSearch = false;
+    let queryEmbedding = null;
+    
+    try {
+      // Generate embedding for the question
+      queryEmbedding = await generateEmbedding(question);
+      useSemanticSearch = true;
+      console.log('✅ Generated query embedding, length:', queryEmbedding.length);
+    } catch (embeddingError) {
+      console.warn('⚠️ Failed to generate embedding, falling back to text search:', {
+        error: embeddingError.message
+      });
+      useSemanticSearch = false;
+    }
+    
+    if (snapshot.empty) {
+      // #region agent log
+      console.log('⚠️ No TSMay documents found');
+      // #endregion
+      return 'Không tìm thấy dữ liệu nào trong collection TSMay.';
+    }
+    
+    // #region agent log
+    console.log('✅ Found TSMay documents:', snapshot.size);
+    // #endregion
+    
+    // Convert documents to array with original column names
+    const documents = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Get column mapping if available (to restore original column names)
+      const columnMapping = data._columnMapping || {};
+      const originalColumns = data._originalColumns || [];
+      
+      // Create reverse mapping: sanitized -> original
+      const reverseMapping = {};
+      Object.keys(columnMapping).forEach(originalName => {
+        const sanitized = columnMapping[originalName];
+        reverseMapping[sanitized] = originalName;
+      });
+      
+      // Build clean data with original column names where possible
+      const cleanData = {};
+      const cleanDataWithOriginalNames = {};
+      
+      Object.keys(data).forEach(key => {
+        if (!key.startsWith('_')) {
+          cleanData[key] = data[key];
+          // Map back to original name if available
+          const originalName = reverseMapping[key] || key;
+          cleanDataWithOriginalNames[originalName] = data[key];
+        }
+      });
+      
+      // Get embedding if available
+      const embedding = data._embedding || null;
+      
+      documents.push({
+        id: doc.id,
+        ...cleanData, // Keep sanitized names for searching
+        _originalData: cleanDataWithOriginalNames, // Store with original names for display
+        _columnMapping: columnMapping,
+        _originalColumns: originalColumns,
+        _embedding: embedding // Store embedding for semantic search
+      });
+    });
+    
+    // Filter and rank documents
+    let filteredDocs = documents;
+    
+    // If semantic search is available, use it
+    if (useSemanticSearch && queryEmbedding) {
+      // Calculate similarity for documents with embeddings
+      const docsWithSimilarity = documents.map(doc => {
+        let similarity = 0;
+        
+        if (doc._embedding && Array.isArray(doc._embedding)) {
+          try {
+            similarity = cosineSimilarity(queryEmbedding, doc._embedding);
+          } catch (error) {
+            console.warn('Error calculating similarity for doc', doc.id, error);
+            similarity = 0;
+          }
+        }
+        
+        return {
+          ...doc,
+          _similarity: similarity
+        };
+      });
+      
+      // Sort by similarity (highest first)
+      docsWithSimilarity.sort((a, b) => b._similarity - a._similarity);
+      
+      // Filter: take top results with similarity > 0.3 (threshold)
+      // Also include documents without embeddings if they match text search
+      filteredDocs = docsWithSimilarity.filter(doc => {
+        if (doc._similarity > 0.3) {
+          return true; // High similarity, include
+        }
+        
+        // If no embedding or low similarity, check text match
+        if (searchTerms.length > 0) {
+          return checkTextMatch(doc, searchTerms);
+        }
+        
+        return false;
+      });
+      
+      // If no semantic matches, fallback to text search
+      if (filteredDocs.length === 0 && searchTerms.length > 0) {
+        console.log('⚠️ No semantic matches, falling back to text search');
+        useSemanticSearch = false;
+      } else {
+        console.log(`✅ Semantic search found ${filteredDocs.length} documents with similarity > 0.3`);
+      }
+    }
+    
+    // Text-based filtering (fallback or when no semantic search)
+    if (!useSemanticSearch || filteredDocs.length === 0) {
+      if (searchTerms.length > 0) {
+        filteredDocs = documents.filter(doc => checkTextMatch(doc, searchTerms));
+        
+        // #region agent log
+        console.log('🔍 Filtered documents (text search):', {
+          originalCount: documents.length,
+          filteredCount: filteredDocs.length,
+          searchTerms
+        });
+        // #endregion
+      }
+    }
+    
+    // Check if this is an aggregation question (count, group, etc.)
+    const isAggregation = isAggregationQuestion(question);
+    
+    if (isAggregation) {
+      // Perform aggregation analysis
+      const aggregationResult = performAggregation(filteredDocs.length > 0 ? filteredDocs : documents, question);
+      
+      let aggregationContext = `**KẾT QUẢ PHÂN TÍCH DỮ LIỆU TSMay:**\n\n`;
+      aggregationContext += `${aggregationResult.message}\n\n`;
+      
+      if (aggregationResult.filterCriteria) {
+        aggregationContext += `**Điều kiện lọc:** ${aggregationResult.filterCriteria.field} = ${aggregationResult.filterCriteria.value}\n\n`;
+      }
+      
+      aggregationContext += `**Thống kê:**\n`;
+      aggregationContext += `- Số bản ghi tìm thấy: ${aggregationResult.filteredCount}\n`;
+      aggregationContext += `- Tổng số bản ghi trong TSMay: ${aggregationResult.totalCount}\n\n`;
+      
+      if (aggregationResult.sampleData && aggregationResult.sampleData.length > 0) {
+        aggregationContext += `**Mẫu dữ liệu (${Math.min(5, aggregationResult.sampleData.length)} bản ghi đầu tiên):**\n\n`;
+        aggregationResult.sampleData.forEach((doc, index) => {
+          aggregationContext += `**Bản ghi ${index + 1}** (ID: ${doc.id}):\n`;
+          const importantFields = ['kVA', 'Soá maùy', 'Số máy', 'SBB', 'LSX', 'TBKT', 'Kiểu máy'];
+          importantFields.forEach(fieldName => {
+            const fieldKey = Object.keys(doc).find(key => 
+              key.toLowerCase().replace(/\s+/g, '') === fieldName.toLowerCase().replace(/\s+/g, '') ||
+              key === fieldName
+            );
+            if (fieldKey && doc[fieldKey] !== null && doc[fieldKey] !== undefined) {
+              aggregationContext += `  - **${fieldKey}**: ${doc[fieldKey]}\n`;
+            }
+          });
+          aggregationContext += `\n`;
+        });
+      }
+      
+      return aggregationContext;
+    }
+    
+    // Limit to top 10 documents for context (reduced to avoid too long context)
+    const topDocs = filteredDocs.slice(0, 10);
+    
+    if (topDocs.length === 0) {
+      return `Không tìm thấy dữ liệu TSMay phù hợp với từ khóa: "${searchTerms.join(', ')}".\n\nTổng số bản ghi trong TSMay: ${documents.length}`;
+    }
+    
+    // Format results with original column names and better structure
+    let tsMayContext = `Tìm thấy ${filteredDocs.length} bản ghi trong TSMay (hiển thị ${topDocs.length} bản ghi đầu tiên):\n\n`;
+    
+    // Define important fields to prioritize in display (use original names)
+    const importantFields = [
+      'kVA', 'Soá maùy', 'Số máy', 'SBB', 'LSX', 'TBKT', 
+      'T.Chuaån LSX', 'T.Chuẩn LSX', 'Kieåu maùy', 'Kiểu máy',
+      'Po (W)', 'Io (%)', 'Pk75 (W)', 'Uk75 (%)', 
+      'Uñm HV', 'Uđm HV', 'LV', 'Ngaøy XX', 'Ngày XX', 'BNC'
+    ];
+    
+    topDocs.forEach((doc, index) => {
+      tsMayContext += `**Bản ghi ${index + 1}** (ID: ${doc.id}):\n`;
+      
+      // Use original data if available, otherwise use sanitized
+      const displayData = doc._originalData || doc;
+      
+      // First, show important fields
+      const shownFields = new Set();
+      
+      // Show important fields first
+      importantFields.forEach(fieldName => {
+        // Try to find field (case-insensitive, with/without spaces)
+        const fieldKey = Object.keys(displayData).find(key => 
+          key.toLowerCase().replace(/\s+/g, '') === fieldName.toLowerCase().replace(/\s+/g, '') ||
+          key === fieldName
+        );
+        
+        if (fieldKey && displayData[fieldKey] !== null && displayData[fieldKey] !== undefined) {
+          const value = displayData[fieldKey];
+          let displayValue = value;
+          if (value instanceof Date) {
+            displayValue = value.toLocaleString('vi-VN');
+          } else if (typeof value === 'object' && value !== null) {
+            displayValue = JSON.stringify(value);
+          } else if (value === null || value === undefined) {
+            displayValue = '(trống)';
+          }
+          tsMayContext += `  - **${fieldKey}**: ${displayValue}\n`;
+          shownFields.add(fieldKey);
+        }
+      });
+      
+      // Then show other fields (not in important list)
+      Object.keys(displayData).forEach(key => {
+        // Skip metadata and already shown fields
+        if (key.startsWith('_') || shownFields.has(key) || key === 'id') {
+          return;
+        }
+        
+        const value = displayData[key];
+        if (value !== null && value !== undefined) {
+          let displayValue = value;
+          if (value instanceof Date) {
+            displayValue = value.toLocaleString('vi-VN');
+          } else if (typeof value === 'object' && value !== null) {
+            displayValue = JSON.stringify(value);
+          }
+          tsMayContext += `  - **${key}**: ${displayValue}\n`;
+        }
+      });
+      
+      tsMayContext += `\n`;
+    });
+    
+    if (filteredDocs.length > topDocs.length) {
+      tsMayContext += `\n... và còn ${filteredDocs.length - topDocs.length} bản ghi khác.\n`;
+    }
+    
+    // Add summary information
+    tsMayContext += `\n**Lưu ý:** Dữ liệu được hiển thị với tên cột gốc từ Excel. Nếu cần tìm kiếm thêm, bạn có thể hỏi về các field cụ thể như: kVA, Số máy, LSX, SBB, TBKT, Kiểu máy, v.v.`;
+    
+    return tsMayContext;
+  } catch (error) {
+    // #region agent log
+    console.error('❌ Error searching TSMay data:', {
+      error: error.message,
+      errorStack: error.stack?.substring(0, 200)
+    });
+    // #endregion
+    
+    // Handle specific error cases
+    const errorMessage = error.message || '';
+    if (errorMessage.includes('permission') || errorMessage.includes('Permission')) {
+      throw new Error(`Không có quyền truy cập collection TSMay. Vui lòng kiểm tra Firestore rules.`);
+    }
+    
+    // For other errors, throw with original message
+    throw error;
+  }
+}
+
+/**
+ * Helper function: Extract search terms from question for TSMay search
+ * Improved to extract codes like "LSX 2081001453" as complete terms
+ */
+function extractTSMaySearchTerms(question) {
+  if (!question || typeof question !== 'string') {
+    return [];
+  }
+  
+  const lowerQuestion = question.toLowerCase();
+  const terms = [];
+  
+  // First, extract codes with patterns like "LSX 2081001453" or "LSX2081001453"
+  // Pattern: 2-4 letters followed by space (optional) and numbers
+  const codePattern = /([a-z]{2,4})\s*(\d{6,})/gi;
+  const codeMatches = question.matchAll(codePattern);
+  for (const match of codeMatches) {
+    const code = match[0].replace(/\s+/g, ''); // Remove spaces: "LSX 2081001453" -> "LSX2081001453"
+    const codeWithSpace = match[0]; // Keep with space: "LSX 2081001453"
+    const numberOnly = match[2]; // Just the number: "2081001453"
+    terms.push(code, codeWithSpace, numberOnly);
+  }
+  
+  // Extract TBKT pattern: alphanumeric codes like "24142TJ", "25076D" (numbers + letters)
+  // Pattern: 4-6 digits followed by 1-3 letters
+  const tbktPattern = /(\d{4,6}[a-z]{1,3})/gi;
+  const tbktMatches = question.matchAll(tbktPattern);
+  for (const match of tbktMatches) {
+    const tbktCode = match[0].toUpperCase(); // "24142TJ" -> "24142TJ"
+    terms.push(tbktCode, tbktCode.toLowerCase());
+  }
+  
+  // Extract standalone long numbers (10+ digits) - likely codes
+  const longNumberPattern = /\d{10,}/g;
+  const longNumbers = question.match(longNumberPattern);
+  if (longNumbers) {
+    terms.push(...longNumbers);
+  }
+  
+  // Extract field codes (LSX, SBB, TBKT, etc.) even without numbers
+  const fieldCodePattern = /\b(lsx|sbb|tbkt|soá\s*maùy|so\s*may|số\s*máy|kieu\s*may|kiểu\s*máy)\b/gi;
+  const fieldCodes = question.match(fieldCodePattern);
+  if (fieldCodes) {
+    terms.push(...fieldCodes.map(code => code.toLowerCase().replace(/\s+/g, '')));
+  }
+  
+  // Remove common question words and TSMay keywords
+  const stopWords = [
+    'tsmay', 'ts may', 'tìm', 'tim', 'trong', 'rong', 'có', 'co',
+    'những', 'nhung', 'nào', 'nao', 'gì', 'gi', 'đâu', 'dau',
+    'thế', 'the', 'bao', 'nhiêu', 'nhieu', 'của', 'cua',
+    'tôi', 'toi', 'bạn', 'ban', 'liệt kê', 'liet ke',
+    'danh sách', 'danh sach', 'list', 'excel', 'bảng', 'bang',
+    'dữ liệu', 'du lieu', 'data', 'import', 'ko', 'không'
+  ];
+  
+  // Split question into words and filter
+  const words = lowerQuestion
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/\s+/)
+    .filter(word => {
+      const normalizedWord = word.toLowerCase();
+      return word.length > 2 && !stopWords.includes(normalizedWord);
+    });
+  
+  // Add meaningful words as search terms (but exclude if already in terms)
+  words.forEach(word => {
+    if (!terms.some(term => term.toLowerCase().includes(word) || word.includes(term.toLowerCase()))) {
+      terms.push(word);
+    }
+  });
+  
+  // Extract all numbers (could be IDs, codes, etc.)
+  const numberMatches = question.match(/\d+/g);
+  if (numberMatches) {
+    numberMatches.forEach(num => {
+      if (!terms.includes(num)) {
+        terms.push(num);
+      }
+    });
+  }
+  
+  // Remove duplicates and empty strings
+  const uniqueTerms = [...new Set(terms.filter(term => term && term.trim().length > 0))];
+  
+  // #region agent log
+  console.log('🔍 extractTSMaySearchTerms:', {
+    question: question.substring(0, 50),
+    terms: uniqueTerms
+  });
+  // #endregion
+  
+  return uniqueTerms;
+}
+
+/**
+ * Helper function: Check if question is asking for statistical calculations
+ */
+function isStatisticalCalculationQuestion(question) {
+  if (!question || typeof question !== 'string') {
+    return false;
+  }
+  
+  const lowerQuestion = question.toLowerCase();
+  const normalizedQuestion = lowerQuestion
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  
+  // Strong statistical keywords (clear calculation requests)
+  const strongStatisticalKeywords = [
+    'tinh do lech chuan', 'tính độ lệch chuẩn', 'do lech chuan', 'độ lệch chuẩn',
+    'standard deviation', 'std dev', 'stddev',
+    'tinh trung binh', 'tính trung bình', 'trung binh', 'trung bình', 'average', 'mean',
+    'tinh trung vi', 'tính trung vị', 'trung vi', 'trung vị', 'median',
+    'tinh phuong sai', 'tính phương sai', 'phuong sai', 'phương sai', 'variance',
+    'tinh min', 'tính min', 'minimum',
+    'tinh max', 'tính max', 'maximum',
+    'tinh tong', 'tính tổng', 'tong', 'tổng', 'sum'
+  ];
+  
+  // Weak statistical keywords (might be general questions)
+  const weakStatisticalKeywords = [
+    'tinh thong ke', 'tính thống kê', 'thong ke', 'thống kê', 'statistics', 'statistical',
+    'tinh toan', 'tính toán', 'tinh', 'tính', 'calculate', 'calculation'
+  ];
+  
+  // Check for strong keywords (always consider as calculation request)
+  const hasStrongKeyword = strongStatisticalKeywords.some(keyword => {
+    const normalizedKeyword = keyword.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return normalizedQuestion.includes(normalizedKeyword);
+  });
+  
+  // Check for weak keywords (need data context)
+  const hasWeakKeyword = weakStatisticalKeywords.some(keyword => {
+    const normalizedKeyword = keyword.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return normalizedQuestion.includes(normalizedKeyword);
+  });
+  
+  // Check if question mentions TSMay/Excel data
+  const hasDataKeyword = /tsmay|ts may|excel|du lieu|dữ liệu|data|kva|po|io|pk75|uk75/i.test(question);
+  
+  // If has strong keyword, always consider as calculation (even without data keyword)
+  // If has weak keyword, need data keyword to confirm
+  const isCalculation = hasStrongKeyword || (hasWeakKeyword && hasDataKeyword);
+  
+  // #region agent log
+  console.log('🔍 isStatisticalCalculationQuestion:', {
+    question: question.substring(0, 50),
+    hasStrongKeyword,
+    hasWeakKeyword,
+    hasDataKeyword,
+    isCalculation
+  });
+  // #endregion
+  
+  return isCalculation;
+}
+
+/**
+ * Helper function: Extract field name and calculation type from question
+ */
+function extractCalculationRequest(question) {
+  if (!question || typeof question !== 'string') {
+    return null;
+  }
+  
+  const lowerQuestion = question.toLowerCase();
+  const normalizedQuestion = lowerQuestion
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  
+  // Detect calculation type
+  let calculationType = null;
+  if (/do lech chuan|standard deviation|std dev|stddev/i.test(normalizedQuestion)) {
+    calculationType = 'standardDeviation';
+  } else if (/trung binh|average|mean/i.test(normalizedQuestion)) {
+    calculationType = 'mean';
+  } else if (/trung vi|median/i.test(normalizedQuestion)) {
+    calculationType = 'median';
+  } else if (/phuong sai|variance/i.test(normalizedQuestion)) {
+    calculationType = 'variance';
+  } else if (/min|minimum/i.test(normalizedQuestion) && !/max/i.test(normalizedQuestion)) {
+    calculationType = 'min';
+  } else if (/max|maximum/i.test(normalizedQuestion)) {
+    calculationType = 'max';
+  } else if (/tong|sum/i.test(normalizedQuestion)) {
+    calculationType = 'sum';
+  }
+  
+  // Extract field name (common TSMay fields)
+  // Pattern 1: "của kVA trong TSMay" -> extract "kVA"
+  // Pattern 2: "của Po (W)" -> extract "Po (W)"
+  const fieldPatterns = [
+    /(?:của|of|cho|for)\s+([a-záàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ\s()]+?)(?:\s+(?:trong|in|từ|from)|$)/i,
+    /(?:field|trường|cột|column)\s+([a-záàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ\s()]+?)(?:\s+(?:trong|in|từ|from)|$)/i
+  ];
+  
+  let fieldName = null;
+  for (const pattern of fieldPatterns) {
+    const match = question.match(pattern);
+    if (match && match[1]) {
+      fieldName = match[1].trim();
+      // Remove "trong TSMay" if accidentally captured
+      fieldName = fieldName.replace(/\s+trong\s+tsmay.*$/i, '').trim();
+      break;
+    }
+  }
+  
+  // If no field specified, try to detect common numeric fields in the question
+  if (!fieldName) {
+    const numericFields = [
+      { pattern: /kva/i, name: 'kVA' },
+      { pattern: /po\s*\(?\s*w\s*\)?/i, name: 'Po (W)' },
+      { pattern: /io\s*\(?\s*%?\s*\)?/i, name: 'Io (%)' },
+      { pattern: /pk75\s*\(?\s*w\s*\)?/i, name: 'Pk75 (W)' },
+      { pattern: /uk75\s*\(?\s*%?\s*\)?/i, name: 'Uk75 (%)' },
+      { pattern: /udm\s+hv|uđm\s+hv/i, name: 'Uđm HV' },
+      { pattern: /lv/i, name: 'LV' },
+      { pattern: /cong\s+suat|công\s+suất|power/i, name: 'kVA' }
+    ];
+    for (const field of numericFields) {
+      if (field.pattern.test(question)) {
+        fieldName = field.name;
+        break;
+      }
+    }
+  }
+  
+  return {
+    type: calculationType,
+    field: fieldName
+  };
+}
+
+/**
+ * Helper function: Calculate statistics from TSMay data
+ */
+async function calculateTSMayStatistics(question) {
+  try {
+    // #region agent log
+    console.log('📊 calculateTSMayStatistics started:', {
+      question: question.substring(0, 50)
+    });
+    // #endregion
+    
+    // Extract calculation request
+    const calcRequest = extractCalculationRequest(question);
+    if (!calcRequest || !calcRequest.type) {
+      throw new Error('Không thể xác định loại tính toán từ câu hỏi.');
+    }
+    
+    // Get all TSMay data
+    const tsMayRef = db.collection('TSMay');
+    const snapshot = await tsMayRef.limit(1000).get(); // Get up to 1000 records
+    
+    if (snapshot.empty) {
+      return 'Không tìm thấy dữ liệu nào trong collection TSMay để tính toán.';
+    }
+    
+    // Convert documents to array
+    const documents = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const columnMapping = data._columnMapping || {};
+      const reverseMapping = {};
+      Object.keys(columnMapping).forEach(originalName => {
+        const sanitized = columnMapping[originalName];
+        reverseMapping[sanitized] = originalName;
+      });
+      
+      const cleanData = {};
+      Object.keys(data).forEach(key => {
+        if (!key.startsWith('_')) {
+          const originalName = reverseMapping[key] || key;
+          cleanData[originalName] = data[key];
+        }
+      });
+      
+      documents.push(cleanData);
+    });
+    
+    // Find the field to calculate
+    let fieldName = calcRequest.field;
+    let fieldValues = [];
+    
+    if (fieldName) {
+      // Try to find field (case-insensitive, with/without spaces)
+      const fieldKey = Object.keys(documents[0] || {}).find(key => 
+        key.toLowerCase().replace(/\s+/g, '') === fieldName.toLowerCase().replace(/\s+/g, '') ||
+        key.toLowerCase().includes(fieldName.toLowerCase()) ||
+        fieldName.toLowerCase().includes(key.toLowerCase())
+      );
+      
+      if (fieldKey) {
+        fieldName = fieldKey;
+        fieldValues = documents
+          .map(doc => doc[fieldKey])
+          .filter(val => val !== null && val !== undefined && val !== '')
+          .map(val => {
+            // Convert to number
+            if (typeof val === 'number') return val;
+            if (typeof val === 'string') {
+              // Remove non-numeric characters except decimal point and minus
+              const numStr = val.replace(/[^\d.-]/g, '');
+              const num = parseFloat(numStr);
+              return isNaN(num) ? null : num;
+            }
+            return null;
+          })
+          .filter(val => val !== null);
+      } else {
+        return `Không tìm thấy field "${calcRequest.field}" trong dữ liệu TSMay. Các field có sẵn: ${Object.keys(documents[0] || {}).slice(0, 10).join(', ')}...`;
+      }
+    } else {
+      // If no field specified, try to find numeric fields automatically
+      // Priority fields (common TSMay numeric fields)
+      const priorityFields = [
+        'kVA', 'kva', 'Po (W)', 'Po', 'Io (%)', 'Io', 
+        'Pk75 (W)', 'Pk75', 'Uk75 (%)', 'Uk75',
+        'Uñm HV', 'Uđm HV', 'LV', 'Udm HV'
+      ];
+      
+      const numericFields = [];
+      if (documents.length > 0) {
+        Object.keys(documents[0]).forEach(key => {
+          const sampleValue = documents[0][key];
+          if (typeof sampleValue === 'number' || 
+              (typeof sampleValue === 'string' && !isNaN(parseFloat(sampleValue.replace(/[^\d.-]/g, ''))))) {
+            numericFields.push(key);
+          }
+        });
+      }
+      
+      if (numericFields.length === 0) {
+        return 'Không tìm thấy field số nào trong dữ liệu TSMay để tính toán.';
+      }
+      
+      // Try to find priority field first
+      let foundPriorityField = null;
+      for (const priorityField of priorityFields) {
+        foundPriorityField = numericFields.find(field => 
+          field.toLowerCase().replace(/\s+/g, '') === priorityField.toLowerCase().replace(/\s+/g, '') ||
+          field.toLowerCase().includes(priorityField.toLowerCase()) ||
+          priorityField.toLowerCase().includes(field.toLowerCase())
+        );
+        if (foundPriorityField) break;
+      }
+      
+      // Use priority field if found, otherwise use first numeric field
+      fieldName = foundPriorityField || numericFields[0];
+      fieldValues = documents
+        .map(doc => doc[fieldName])
+        .filter(val => val !== null && val !== undefined && val !== '')
+        .map(val => {
+          if (typeof val === 'number') return val;
+          if (typeof val === 'string') {
+            const numStr = val.replace(/[^\d.-]/g, '');
+            const num = parseFloat(numStr);
+            return isNaN(num) ? null : num;
+          }
+          return null;
+        })
+        .filter(val => val !== null);
+    }
+    
+    if (fieldValues.length === 0) {
+      return `Không tìm thấy giá trị số hợp lệ nào trong field "${fieldName}" để tính toán.`;
+    }
+    
+    // Perform calculation
+    let result = null;
+    let resultLabel = '';
+    
+    switch (calcRequest.type) {
+      case 'mean':
+        result = fieldValues.reduce((sum, val) => sum + val, 0) / fieldValues.length;
+        resultLabel = 'Trung bình';
+        break;
+      
+      case 'median':
+        const sorted = [...fieldValues].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        result = sorted.length % 2 === 0 
+          ? (sorted[mid - 1] + sorted[mid]) / 2 
+          : sorted[mid];
+        resultLabel = 'Trung vị';
+        break;
+      
+      case 'standardDeviation':
+        const mean = fieldValues.reduce((sum, val) => sum + val, 0) / fieldValues.length;
+        const variance = fieldValues.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / fieldValues.length;
+        result = Math.sqrt(variance);
+        resultLabel = 'Độ lệch chuẩn';
+        break;
+      
+      case 'variance':
+        const mean2 = fieldValues.reduce((sum, val) => sum + val, 0) / fieldValues.length;
+        result = fieldValues.reduce((sum, val) => sum + Math.pow(val - mean2, 2), 0) / fieldValues.length;
+        resultLabel = 'Phương sai';
+        break;
+      
+      case 'min':
+        result = Math.min(...fieldValues);
+        resultLabel = 'Giá trị nhỏ nhất';
+        break;
+      
+      case 'max':
+        result = Math.max(...fieldValues);
+        resultLabel = 'Giá trị lớn nhất';
+        break;
+      
+      case 'sum':
+        result = fieldValues.reduce((sum, val) => sum + val, 0);
+        resultLabel = 'Tổng';
+        break;
+      
+      default:
+        throw new Error(`Loại tính toán "${calcRequest.type}" chưa được hỗ trợ.`);
+    }
+    
+    // Format result
+    const formattedResult = typeof result === 'number' && result % 1 !== 0 
+      ? result.toFixed(4) 
+      : result.toString();
+    
+    return `**Kết quả tính toán thống kê từ dữ liệu TSMay:**
+    
+**${resultLabel}** của field **"${fieldName}"**: **${formattedResult}**
+
+**Thông tin:**
+- Số lượng bản ghi đã sử dụng: ${fieldValues.length}
+- Tổng số bản ghi trong TSMay: ${documents.length}
+- Field được tính toán: "${fieldName}"
+
+${calcRequest.type === 'standardDeviation' ? `
+**Giải thích:** Độ lệch chuẩn cho biết mức độ phân tán của dữ liệu. Giá trị càng lớn, dữ liệu càng phân tán.` : ''}
+${calcRequest.type === 'mean' ? `
+**Giải thích:** Trung bình là giá trị trung bình cộng của tất cả các giá trị.` : ''}
+${calcRequest.type === 'median' ? `
+**Giải thích:** Trung vị là giá trị ở giữa khi sắp xếp dữ liệu theo thứ tự tăng dần.` : ''}`;
+    
+  } catch (error) {
+    // #region agent log
+    console.error('❌ Error calculating TSMay statistics:', {
+      error: error.message,
+      errorStack: error.stack?.substring(0, 200)
+    });
+    // #endregion
+    
+    throw error;
+  }
 }
 
 /**
@@ -2287,6 +3696,230 @@ exports.telegramOnboarding = onRequest(
  *   "employee": { ... }
  * }
  */
+/**
+ * Cloud Function: Generate embeddings for TSMay documents
+ * This function can be called to generate embeddings for existing documents
+ * or to update embeddings for documents that don't have them yet
+ */
+exports.generateTSMayEmbeddings = onRequest(
+  {
+    cors: true,
+    maxInstances: 5
+  },
+  async (req, res) => {
+    // Handle CORS preflight
+    cors(req, res, async () => {
+      try {
+        // Check authentication (optional, can be removed if you want public access)
+        // const authHeader = req.headers.authorization;
+        // if (!authHeader) {
+        //   return res.status(401).json({ error: 'Unauthorized' });
+        // }
+
+        const { limit = 100, batchSize = 10 } = req.body || {};
+        
+        console.log('🔄 Starting to generate embeddings for TSMay documents...', {
+          limit,
+          batchSize
+        });
+
+        // Get TSMay collection
+        const tsMayRef = db.collection('TSMay');
+        
+        // Get documents without embeddings or with old embeddings
+        const snapshot = await tsMayRef
+          .where('_embedding', '==', null) // Documents without embeddings
+          .limit(limit)
+          .get();
+
+        if (snapshot.empty) {
+          // Try to get any documents to check if they need updating
+          const allSnapshot = await tsMayRef.limit(limit).get();
+          if (allSnapshot.empty) {
+            return res.status(200).json({
+              success: true,
+              message: 'No TSMay documents found',
+              processed: 0
+            });
+          }
+          
+          // Process documents that might need embedding update
+          const documents = [];
+          allSnapshot.forEach(doc => {
+            const data = doc.data();
+            if (!data._embedding || !Array.isArray(data._embedding)) {
+              documents.push({ id: doc.id, data });
+            }
+          });
+          
+          if (documents.length === 0) {
+            return res.status(200).json({
+              success: true,
+              message: 'All documents already have embeddings',
+              processed: 0
+            });
+          }
+          
+          return await processEmbeddingsBatch(documents, batchSize, res);
+        }
+
+        // Process documents without embeddings
+        const documents = [];
+        snapshot.forEach(doc => {
+          documents.push({ id: doc.id, data: doc.data() });
+        });
+
+        await processEmbeddingsBatch(documents, batchSize, res);
+      } catch (error) {
+        console.error('❌ Error generating embeddings:', error);
+        res.status(500).json({
+          error: 'Internal Server Error',
+          message: error.message
+        });
+      }
+    });
+  }
+);
+
+/**
+ * Helper function: Process embeddings in batches
+ */
+async function processEmbeddingsBatch(documents, batchSize, res) {
+  let processed = 0;
+  let errors = 0;
+  const errorsList = [];
+
+  for (let i = 0; i < documents.length; i += batchSize) {
+    const batch = documents.slice(i, i + batchSize);
+    
+    console.log(`📊 Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(documents.length / batchSize)}...`);
+
+    await Promise.all(batch.map(async (docItem) => {
+      try {
+        const { id, data } = docItem;
+        
+        // Create text representation for embedding
+        const docText = createDocumentText({
+          _originalData: data._originalData || data,
+          ...data
+        });
+
+        if (!docText || docText.trim().length === 0) {
+          console.warn(`⚠️ Skipping document ${id}: empty text`);
+          return;
+        }
+
+        // Generate embedding
+        const embedding = await generateEmbedding(docText);
+        
+        // Update document with embedding
+        await db.collection('TSMay').doc(id).update({
+          _embedding: embedding,
+          _embeddingGeneratedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        processed++;
+        console.log(`✅ Generated embedding for document ${id} (${processed}/${documents.length})`);
+      } catch (error) {
+        errors++;
+        const errorMsg = `Document ${docItem.id}: ${error.message}`;
+        errorsList.push(errorMsg);
+        console.error(`❌ Error processing document ${docItem.id}:`, error);
+      }
+    }));
+
+    // Small delay between batches to avoid rate limiting
+    if (i + batchSize < documents.length) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `Processed ${processed} documents, ${errors} errors`,
+    processed,
+    errors,
+    errorsList: errorsList.slice(0, 10) // Return first 10 errors
+  });
+}
+
+/**
+ * Cloud Function: Generate embedding for a single TSMay document
+ * Can be called after importing a document to generate its embedding
+ */
+exports.generateTSMayDocumentEmbedding = onRequest(
+  {
+    cors: true,
+    maxInstances: 10
+  },
+  async (req, res) => {
+    cors(req, res, async () => {
+      try {
+        const { documentId } = req.body || req.query;
+        
+        if (!documentId) {
+          return res.status(400).json({
+            error: 'Bad Request',
+            message: 'documentId is required'
+          });
+        }
+
+        console.log(`🔄 Generating embedding for document ${documentId}...`);
+
+        // Get document
+        const docRef = db.collection('TSMay').doc(documentId);
+        const doc = await docRef.get();
+
+        if (!doc.exists) {
+          return res.status(404).json({
+            error: 'Not Found',
+            message: `Document ${documentId} not found`
+          });
+        }
+
+        const data = doc.data();
+        
+        // Create text representation for embedding
+        const docText = createDocumentText({
+          _originalData: data._originalData || data,
+          ...data
+        });
+
+        if (!docText || docText.trim().length === 0) {
+          return res.status(400).json({
+            error: 'Bad Request',
+            message: 'Document has no text content to embed'
+          });
+        }
+
+        // Generate embedding
+        const embedding = await generateEmbedding(docText);
+        
+        // Update document with embedding
+        await docRef.update({
+          _embedding: embedding,
+          _embeddingGeneratedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log(`✅ Generated embedding for document ${documentId}`);
+
+        res.status(200).json({
+          success: true,
+          message: 'Embedding generated successfully',
+          documentId,
+          embeddingLength: embedding.length
+        });
+      } catch (error) {
+        console.error('❌ Error generating embedding:', error);
+        res.status(500).json({
+          error: 'Internal Server Error',
+          message: error.message
+        });
+      }
+    });
+  }
+);
+
 exports.telegramLogin = onRequest(
   {
     cors: true,

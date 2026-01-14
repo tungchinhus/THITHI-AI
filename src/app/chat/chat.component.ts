@@ -1,6 +1,7 @@
 import { Component, OnInit, ViewChild, ElementRef, AfterViewChecked, OnDestroy } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterModule } from '@angular/router';
 import { MarkdownModule } from 'ngx-markdown';
 import { ChatService } from './chat.service';
 import { TelegramAuthService } from '../telegram-auth.service';
@@ -27,7 +28,7 @@ declare global {
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule, MarkdownModule, DatePipe],
+  imports: [CommonModule, FormsModule, MarkdownModule, DatePipe, RouterModule],
   templateUrl: './chat.component.html',
   styleUrls: ['./chat.component.css']
 })
