@@ -146,3 +146,188 @@ BEGIN
     -- For now, we'll rely on full-text search or calculate in application
 END
 GO
+
+-- ============================================
+-- Chat Memory Schema for Deep Memory & Context-Aware Suggestions
+-- ============================================
+
+-- Create ChatSessions table
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ChatSessions')
+BEGIN
+    CREATE TABLE ChatSessions (
+        SessionId UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        UserId NVARCHAR(255) NOT NULL,
+        Title NVARCHAR(500) NULL,
+        StartedAt DATETIME2 DEFAULT GETDATE(),
+        LastActivityAt DATETIME2 DEFAULT GETDATE(),
+        MessageCount INT DEFAULT 0,
+        IsActive BIT DEFAULT 1,
+        
+        -- Indexes
+        INDEX IX_ChatSessions_UserId (UserId),
+        INDEX IX_ChatSessions_LastActivityAt (LastActivityAt),
+        INDEX IX_ChatSessions_IsActive (IsActive)
+    );
+END
+GO
+
+-- Create ChatMemory table with vector embeddings
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ChatMemory')
+BEGIN
+    CREATE TABLE ChatMemory (
+        Id INT IDENTITY(1,1) PRIMARY KEY,
+        UserId NVARCHAR(255) NOT NULL,
+        SessionId UNIQUEIDENTIFIER NULL,
+        
+        -- Content fields
+        [Content] NVARCHAR(MAX) NOT NULL, -- Chat message content (user or assistant)
+        VectorData NVARCHAR(MAX) NULL, -- Vector embedding as JSON array
+        ContentType NVARCHAR(50) NOT NULL, -- 'user' or 'assistant'
+        Metadata NVARCHAR(MAX) NULL, -- Additional metadata as JSON
+        
+        -- Timestamps
+        CreatedAt DATETIME2 DEFAULT GETDATE(),
+        UpdatedAt DATETIME2 DEFAULT GETDATE(),
+        
+        -- Foreign key to ChatSessions
+        CONSTRAINT FK_ChatMemory_SessionId FOREIGN KEY (SessionId) 
+            REFERENCES ChatSessions(SessionId) ON DELETE CASCADE,
+        
+        -- Indexes
+        INDEX IX_ChatMemory_UserId (UserId),
+        INDEX IX_ChatMemory_SessionId (SessionId),
+        INDEX IX_ChatMemory_ContentType (ContentType),
+        INDEX IX_ChatMemory_CreatedAt (CreatedAt)
+    );
+END
+GO
+
+-- Stored procedure: Create or update chat session
+IF EXISTS (SELECT * FROM sys.objects WHERE name = 'sp_upsert_chat_session')
+    DROP PROCEDURE sp_upsert_chat_session;
+GO
+
+CREATE PROCEDURE sp_upsert_chat_session
+    @sessionId UNIQUEIDENTIFIER = NULL,
+    @userId NVARCHAR(255),
+    @title NVARCHAR(500) = NULL,
+    @updateActivity BIT = 1
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @resultSessionId UNIQUEIDENTIFIER;
+    
+    -- If sessionId provided, update existing session
+    IF @sessionId IS NOT NULL AND EXISTS (SELECT 1 FROM ChatSessions WHERE SessionId = @sessionId)
+    BEGIN
+        UPDATE ChatSessions
+        SET 
+            Title = ISNULL(@title, Title),
+            LastActivityAt = CASE WHEN @updateActivity = 1 THEN GETDATE() ELSE LastActivityAt END,
+            MessageCount = MessageCount + CASE WHEN @updateActivity = 1 THEN 1 ELSE 0 END
+        WHERE SessionId = @sessionId;
+        
+        SET @resultSessionId = @sessionId;
+    END
+    ELSE
+    BEGIN
+        -- Create new session
+        SET @resultSessionId = NEWID();
+        
+        INSERT INTO ChatSessions (SessionId, UserId, Title, StartedAt, LastActivityAt, MessageCount, IsActive)
+        VALUES (@resultSessionId, @userId, @title, GETDATE(), GETDATE(), 1, 1);
+    END
+    
+    SELECT @resultSessionId AS SessionId;
+END
+GO
+
+-- Stored procedure: Insert chat memory with vector embedding
+IF EXISTS (SELECT * FROM sys.objects WHERE name = 'sp_insert_chat_memory')
+    DROP PROCEDURE sp_insert_chat_memory;
+GO
+
+CREATE PROCEDURE sp_insert_chat_memory
+    @userId NVARCHAR(255),
+    @sessionId UNIQUEIDENTIFIER = NULL,
+    @content NVARCHAR(MAX),
+    @vectorData NVARCHAR(MAX) = NULL,
+    @contentType NVARCHAR(50),
+    @metadata NVARCHAR(MAX) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    INSERT INTO ChatMemory (UserId, SessionId, [Content], VectorData, ContentType, Metadata, CreatedAt, UpdatedAt)
+    VALUES (@userId, @sessionId, @content, @vectorData, @contentType, @metadata, GETDATE(), GETDATE());
+    
+    SELECT SCOPE_IDENTITY() AS Id;
+END
+GO
+
+-- Stored procedure: Search chat memory with vector similarity
+IF EXISTS (SELECT * FROM sys.objects WHERE name = 'sp_search_chat_memory_vector')
+    DROP PROCEDURE sp_search_chat_memory_vector;
+GO
+
+CREATE PROCEDURE sp_search_chat_memory_vector
+    @userId NVARCHAR(255),
+    @queryVectorJson NVARCHAR(MAX),
+    @similarityThreshold FLOAT = 0.3,
+    @topN INT = 10,
+    @sessionId UNIQUEIDENTIFIER = NULL,
+    @contentType NVARCHAR(50) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- Get candidate records (similarity will be calculated in Node.js)
+    SELECT TOP (@topN)
+        Id,
+        UserId,
+        SessionId,
+        [Content],
+        VectorData,
+        ContentType,
+        Metadata,
+        CreatedAt,
+        UpdatedAt
+    FROM ChatMemory
+    WHERE 
+        UserId = @userId
+        AND VectorData IS NOT NULL
+        AND (@sessionId IS NULL OR SessionId = @sessionId)
+        AND (@contentType IS NULL OR ContentType = @contentType)
+    ORDER BY CreatedAt DESC;
+END
+GO
+
+-- Stored procedure: Get recent chat memory for context
+IF EXISTS (SELECT * FROM sys.objects WHERE name = 'sp_get_recent_chat_memory')
+    DROP PROCEDURE sp_get_recent_chat_memory;
+GO
+
+CREATE PROCEDURE sp_get_recent_chat_memory
+    @userId NVARCHAR(255),
+    @topN INT = 50,
+    @sessionId UNIQUEIDENTIFIER = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    SELECT TOP (@topN)
+        Id,
+        UserId,
+        SessionId,
+        [Content],
+        ContentType,
+        Metadata,
+        CreatedAt
+    FROM ChatMemory
+    WHERE 
+        UserId = @userId
+        AND (@sessionId IS NULL OR SessionId = @sessionId)
+    ORDER BY CreatedAt DESC;
+END
+GO
