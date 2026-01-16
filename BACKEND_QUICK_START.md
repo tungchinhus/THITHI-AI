@@ -7,7 +7,7 @@ Hướng dẫn nhanh để chạy backend trong 2 phút.
 ### Terminal 1: Python API
 
 ```powershell
-cd python-api
+cd ..\THITHI_python-api
 python app.py
 ```
 

@@ -65,3 +65,71 @@ yarn-error.log*
 # TypeScript
 *.tsbuildinfo
 
+# Compiled binaries (Windows)
+*.exe
+*.dll
+*.pdb
+*.so
+*.dylib
+
+# .NET Build outputs
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dll.config
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Python virtual environments (nếu có trong root hoặc subdirectories)
+**/venv/
+**/env/
+**/ENV/
+**/.venv/
+
+# Functions dependencies
+functions/node_modules/
+functions/package-lock.json
+
+# Database files (nếu có local database)
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage reports
+coverage/
+*.coverage
+.nyc_output/
+
+# Test results
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Secrets và credentials
+**/secrets.json
+**/credentials.json
+**/*secret*.json
+**/*credential*.json
+
+# User-specific files
+*.rsuser
+*.suo.user

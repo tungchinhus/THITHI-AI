@@ -38,10 +38,89 @@ async function initializeSQLPool(config) {
   };
 
   try {
+    // #region agent log
+    const logData = {
+      location: 'sql-connection.js:41',
+      message: 'Attempting SQL connection',
+      data: {
+        server: sqlConfig.server,
+        database: sqlConfig.database,
+        port: sqlConfig.port,
+        user: sqlConfig.user ? '***' : null,
+        hasPassword: !!sqlConfig.password
+      },
+      timestamp: Date.now(),
+      sessionId: 'debug-session',
+      runId: 'run1',
+      hypothesisId: 'G'
+    };
+    try {
+      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(logData)
+      }).catch(() => {});
+    } catch (e) {}
+    console.log('🔍 DEBUG: Attempting SQL connection', {
+      server: sqlConfig.server,
+      database: sqlConfig.database,
+      port: sqlConfig.port
+    });
+    // #endregion
     pool = await sql.connect(sqlConfig);
+    // #region agent log
+    const successLog = {
+      location: 'sql-connection.js:58',
+      message: 'SQL connection successful',
+      data: { connected: pool?.connected },
+      timestamp: Date.now(),
+      sessionId: 'debug-session',
+      runId: 'run1',
+      hypothesisId: 'G'
+    };
+    try {
+      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(successLog)
+      }).catch(() => {});
+    } catch (e) {}
+    // #endregion
     console.log('✅ SQL Server connection pool initialized');
     return pool;
   } catch (error) {
+    // #region agent log
+    const errorLog = {
+      location: 'sql-connection.js:70',
+      message: 'SQL connection failed',
+      data: {
+        error: error.message,
+        code: error.code,
+        name: error.name,
+        server: sqlConfig.server,
+        port: sqlConfig.port,
+        stack: error.stack?.substring(0, 300)
+      },
+      timestamp: Date.now(),
+      sessionId: 'debug-session',
+      runId: 'run1',
+      hypothesisId: 'G'
+    };
+    try {
+      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(errorLog)
+      }).catch(() => {});
+    } catch (e) {}
+    console.error('🔍 DEBUG: SQL connection error details', {
+      error: error.message,
+      code: error.code,
+      name: error.name,
+      server: sqlConfig.server,
+      port: sqlConfig.port
+    });
+    // #endregion
     console.error('❌ Error initializing SQL Server connection:', error);
     throw error;
   }

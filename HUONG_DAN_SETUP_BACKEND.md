@@ -47,13 +47,13 @@ stop-all-services.bat
 #### Bước 1: Chạy Python API
 
 ```powershell
-cd python-api
+cd ..\THITHI_python-api
 start-simple.bat
 ```
 
 Hoặc:
 ```powershell
-cd python-api
+cd ..\THITHI_python-api
 venv\Scripts\activate
 python app.py
 ```
@@ -139,17 +139,18 @@ Nếu Python API chạy port khác, cập nhật URL này.
 ## 📁 Cấu Trúc Project
 
 ```
-THIHI_AI/
-├── backend/
-│   └── THIHI_AI.Backend/
-│       ├── Controllers/
-│       │   └── VectorImportController.cs
-│       ├── Services/
-│       │   └── VectorImportService.cs
-│       ├── Program.cs
-│       └── appsettings.json
+THITHI/
+├── THIHI_AI/
+│   └── backend/
+│       └── THIHI_AI.Backend/
+│           ├── Controllers/
+│           │   └── VectorImportController.cs
+│           ├── Services/
+│           │   └── VectorImportService.cs
+│           ├── Program.cs
+│           └── appsettings.json
 │
-└── python-api/
+└── THITHI_python-api/
     ├── app.py
     ├── requirements.txt
     ├── README.md
@@ -320,7 +321,7 @@ netstat -ano | findstr :5005
 taskkill /PID <PID> /F
 ```
 
-Hoặc đổi port trong `python-api/app.py`:
+Hoặc đổi port trong `..\THITHI_python-api\app.py`:
 ```python
 app.run(host='0.0.0.0', port=5006, debug=True)
 ```
@@ -437,7 +438,7 @@ Testing .NET Backend health...
 ## 📚 Tài Liệu Tham Khảo
 
 - [.NET Backend README](backend/THIHI_AI.Backend/README.md)
-- [Python API README](python-api/README.md)
+- [Python API README](../THITHI_python-api/README.md)
 - [SQL Server Vector Guide](HUONG_DAN_SQL_SERVER_VECTOR.md)
 
 ## 💡 Tips

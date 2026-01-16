@@ -344,7 +344,13 @@ exports.chatFunction = onRequest(
     maxInstances: 10,
     secrets: [
       "GEMINI_API_KEY",
-      "MICROSOFT_CLIENT_SECRET" // For future refresh token implementation
+      "MICROSOFT_CLIENT_SECRET", // For future refresh token implementation
+      // SQL Server secrets for chat memory
+      "SQL_SERVER_HOST",
+      "SQL_SERVER_USER",
+      "SQL_SERVER_PASSWORD",
+      "SQL_SERVER_DATABASE",
+      "SQL_SERVER_PORT" // Optional
       // Note: MICROSOFT_TENANT_ID removed - not needed in backend, already in frontend environment.ts
     ],
   },
@@ -367,6 +373,13 @@ exports.chatFunction = onRequest(
       let sqlPoolInitialized = false;
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:368',message:'Checking SQL Server config',data:{hasSqlConnection:!!sqlConnection,hasSqlHost:!!process.env.SQL_SERVER_HOST,hasSqlUser:!!process.env.SQL_SERVER_USER,hasSqlPassword:!!process.env.SQL_SERVER_PASSWORD,hasSqlDatabase:!!process.env.SQL_SERVER_DATABASE},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      console.log('🔍 DEBUG: SQL Server config check', {
+        hasSqlConnection: !!sqlConnection,
+        hasSqlHost: !!process.env.SQL_SERVER_HOST,
+        hasSqlUser: !!process.env.SQL_SERVER_USER,
+        hasSqlPassword: !!process.env.SQL_SERVER_PASSWORD,
+        hasSqlDatabase: !!process.env.SQL_SERVER_DATABASE
+      });
       // #endregion
       if (sqlConnection && process.env.SQL_SERVER_HOST) {
         try {
@@ -399,9 +412,14 @@ exports.chatFunction = onRequest(
           }
         } catch (sqlError) {
           // #region agent log
-          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:385',message:'Pool init failed',data:{error:sqlError.message,stack:sqlError.stack?.substring(0,200),sqlPoolInitialized},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:385',message:'Pool init failed',data:{error:sqlError.message,code:sqlError.code,name:sqlError.name,stack:sqlError.stack?.substring(0,300),sqlPoolInitialized},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
           // #endregion
           console.warn('⚠️ Failed to initialize SQL Server connection pool:', sqlError.message);
+          console.warn('   Error code:', sqlError.code);
+          console.warn('   Error name:', sqlError.name);
+          console.warn('   Server:', process.env.SQL_SERVER_HOST);
+          console.warn('   Note: If using localhost, SQL Server must be accessible from Firebase Functions (cloud).');
+          console.warn('   Consider using Azure SQL Database or a public IP address.');
           sqlPoolInitialized = false;
         }
       } else {
@@ -1238,6 +1256,13 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
       // Save chat memory to database (async, don't wait)
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1203',message:'Checking save memory conditions',data:{hasService:!!sqlChatMemoryService,sqlPoolInitialized,hasUserInfo:!!userInfo,hasSessionId:!!chatSessionId,userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+      console.log('🔍 DEBUG: Save memory check', {
+        hasService: !!sqlChatMemoryService,
+        sqlPoolInitialized,
+        hasUserInfo: !!userInfo,
+        hasSessionId: !!chatSessionId,
+        userId
+      });
       // #endregion
       if (sqlChatMemoryService && sqlPoolInitialized && userInfo) {
         try {
@@ -1294,8 +1319,14 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
       } else {
         // #region agent log
         fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1240',message:'Skipping SQL save, using fallback',data:{hasService:!!sqlChatMemoryService,sqlPoolInitialized,hasUserInfo:!!userInfo},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        console.log('🔍 DEBUG: Skipping SQL save - conditions not met', {
+          hasService: !!sqlChatMemoryService,
+          sqlPoolInitialized,
+          hasUserInfo: !!userInfo,
+          reason: !sqlChatMemoryService ? 'no service' : !sqlPoolInitialized ? 'pool not initialized' : 'no userInfo'
+        });
         // #endregion
-      } else {
+        
         // Fallback: Save to Firestore if SQL Server not available
         if (userInfo && db) {
           try {
