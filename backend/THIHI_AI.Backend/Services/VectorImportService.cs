@@ -31,6 +31,7 @@ public class VectorImportService
         // BƯỚC 1: Đọc và gộp dữ liệu từ Excel
         var rawData = MiniExcel.Query(fileStream).Cast<IDictionary<string, object>>().ToList();
         var processedTexts = new List<string>();
+        var validRawData = new List<IDictionary<string, object>>(); // Chỉ lưu các dòng hợp lệ
 
         _logger.LogInformation("Đã đọc {Count} dòng raw data từ Excel", rawData.Count);
         
@@ -83,25 +84,42 @@ public class VectorImportService
                 continue;
             }
             
+            // Lưu cả processedText và rawData tương ứng để đảm bảo mapping đúng
             processedTexts.Add(combinedText);
+            validRawData.Add(row); // Lưu rawData tương ứng
             _logger.LogDebug("Processed text: {Text}", combinedText.Substring(0, Math.Min(100, combinedText.Length)));
         }
 
         if (!processedTexts.Any())
         {
             _logger.LogWarning("Không có dữ liệu nào được xử lý từ Excel file");
-            return;
+            throw new InvalidOperationException("Không có dữ liệu hợp lệ để import. Vui lòng kiểm tra lại file Excel.");
         }
 
         _logger.LogInformation("Đã đọc {Count} dòng từ Excel (sau khi filter)", processedTexts.Count);
 
         // BƯỚC 2: Gọi Python để lấy Vector (Chia batch nếu dữ liệu lớn)
         // Nếu file > 1000 dòng, nên chia nhỏ (chunk) để gửi nhiều lần
-        var vectors = await GetVectorsFromPythonAsync(processedTexts);
+        List<List<float>>? vectors = null;
+        try
+        {
+            vectors = await GetVectorsFromPythonAsync(processedTexts);
+            _logger.LogInformation("Đã nhận được {Count} vectors từ Python API", vectors.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Lỗi khi gọi Python API để vectorize. Sẽ lưu dữ liệu không có vector.");
+            // Tạo empty vectors để vẫn có thể lưu data
+            vectors = new List<List<float>>();
+            for (int i = 0; i < processedTexts.Count; i++)
+            {
+                vectors.Add(new List<float>()); // Empty vector
+            }
+        }
 
         // BƯỚC 3: Lưu vào SQL Server
         // Ở đây ta không chỉ lưu Content & VectorJson mà còn lưu thêm các cột gốc để phục vụ tính toán
-        await SaveToDynamicTableAsync(tableName, processedTexts, vectors, rawData);
+        await SaveToDynamicTableAsync(tableName, processedTexts, vectors, validRawData);
 
         _logger.LogInformation("Hoàn thành import {Count} records vào bảng {TableName}", 
             processedTexts.Count, tableName);
@@ -163,7 +181,16 @@ public class VectorImportService
     {
         if (contents.Count != vectors.Count)
         {
-            throw new ArgumentException("Số lượng contents và vectors không khớp");
+            _logger.LogError("Số lượng contents ({ContentCount}) và vectors ({VectorCount}) không khớp", 
+                contents.Count, vectors.Count);
+            throw new ArgumentException($"Số lượng contents ({contents.Count}) và vectors ({vectors.Count}) không khớp");
+        }
+
+        if (contents.Count != rawRows.Count)
+        {
+            _logger.LogWarning("Số lượng contents ({ContentCount}) và rawRows ({RawRowCount}) không khớp. Có thể do filter dòng trống.", 
+                contents.Count, rawRows.Count);
+            // Không throw exception vì có thể do filter dòng trống
         }
 
         // Sanitize tên bảng (Chống SQL Injection cơ bản)
@@ -289,14 +316,32 @@ public class VectorImportService
                     continue;
                 }
 
-                string vectorJson = JsonSerializer.Serialize(vector);
+                // Xử lý vector: nếu rỗng thì lưu null, nếu có thì serialize
+                string? vectorJson = null;
+                if (vector != null && vector.Count > 0)
+                {
+                    try
+                    {
+                        vectorJson = JsonSerializer.Serialize(vector);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Lỗi khi serialize vector cho row {Index}, sẽ lưu null", i);
+                        vectorJson = null;
+                    }
+                }
 
                 using var cmd = new SqlCommand(insertSqlTemplate, conn, transaction);
                 cmd.Parameters.AddWithValue("@Content", text.Trim());
-                cmd.Parameters.AddWithValue("@VectorJson", vectorJson);
+                cmd.Parameters.AddWithValue("@VectorJson", vectorJson ?? (object)DBNull.Value);
 
-                // Lấy dòng raw tương ứng (nếu có)
+                // Lấy dòng raw tương ứng (đảm bảo mapping đúng)
                 IDictionary<string, object>? rawRow = i < rawRows.Count ? rawRows[i] : null;
+
+                if (rawRow == null)
+                {
+                    _logger.LogWarning("Không tìm thấy rawRow tương ứng cho index {Index}", i);
+                }
 
                 foreach (var kvp in headerToColumn)
                 {
@@ -320,11 +365,22 @@ public class VectorImportService
                     cmd.Parameters.AddWithValue("@" + colName, value ?? (object)DBNull.Value);
                 }
 
-                _logger.LogDebug("Inserting row {Index}: Content length={Length}, Vector length={VecLength}", 
-                    i, text.Length, vector.Count);
-
-                await cmd.ExecuteNonQueryAsync();
-                insertedCount++;
+                try
+                {
+                    await cmd.ExecuteNonQueryAsync();
+                    insertedCount++;
+                    
+                    if ((i + 1) % 100 == 0)
+                    {
+                        _logger.LogInformation("Đã insert {Count}/{Total} records", insertedCount, contents.Count);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Lỗi khi insert row {Index}: Content={Content}", 
+                        i, text.Substring(0, Math.Min(50, text.Length)));
+                    throw; // Re-throw để rollback transaction
+                }
             }
             
             transaction.Commit();

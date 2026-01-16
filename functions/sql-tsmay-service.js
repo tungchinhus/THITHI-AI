@@ -82,6 +82,186 @@ async function generateAndSaveEmbedding(documentId, data) {
 }
 
 /**
+ * Detect if question asks for specific field value (e.g., "KVA là 250", "KVA = 250")
+ * @param {string} question - User question
+ * @returns {Object|null} { field: 'KVA', value: '250' } or null
+ */
+function detectFieldValueQuery(question) {
+  const lowerQuestion = question.toLowerCase();
+  
+  // Pattern 1: "KVA là 250", "KVA = 250", "KVA 250", "có KVA 250"
+  const patterns = [
+    /(?:kva|kva\s*=|kva\s*là|kva\s*có|có\s*kva)\s*(\d+)/i,
+    /(\d+)\s*(?:kva|kva\s*=|kva\s*là)/i,
+    // Pattern 2: "số máy là 212250026", "số máy = 212250026"
+    /(?:số\s*máy|so\s*may|số\s*may|so\s*máy)\s*(?:là|=|có)?\s*(\d+)/i,
+    /(\d+)\s*(?:số\s*máy|so\s*may)/i,
+    // Pattern 3: "SBB là 2130478", "SBB = 2130478"
+    /(?:sbb|sbb\s*=|sbb\s*là|có\s*sbb)\s*(\d+)/i,
+    /(\d+)\s*(?:sbb|sbb\s*=|sbb\s*là)/i,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = question.match(pattern);
+    if (match) {
+      let field = null;
+      let value = match[1] || match[0];
+      
+      // Determine field name
+      if (/kva/i.test(question)) {
+        field = 'KVA';
+      } else if (/số\s*máy|so\s*may/i.test(question)) {
+        field = 'Số máy';
+      } else if (/sbb/i.test(question)) {
+        field = 'SBB';
+      }
+      
+      if (field && value) {
+        return { field, value: value.trim() };
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Search TSMay data by specific field value (direct SQL query)
+ * @param {string} fieldName - Field name (e.g., "KVA", "Số máy")
+ * @param {string} fieldValue - Field value to search for
+ * @param {Object} options - Search options
+ * @returns {Promise<Object>} Search results
+ */
+async function searchTSMayByFieldValue(fieldName, fieldValue, options = {}) {
+  try {
+    const { topN = 1000 } = options;
+    
+    console.log(`🔍 Searching TSMay by field value: ${fieldName} = ${fieldValue}`);
+    
+    // Query to find records where the field matches the value
+    // Need to search in DataJson JSON field
+    // Also search in Content field (which contains combined text like "250 - 212250026 - ...")
+    // And search in all JSON keys (case-insensitive)
+    // Escape field name for SQL injection prevention
+    const escapedFieldName = fieldName.replace(/'/g, "''");
+    
+    let query = `
+      SELECT TOP (@topN)
+        Id, DocumentId, DataJson, EmbeddingJson, ImportedAt, RowIndex, OriginalColumns, Content
+      FROM TSMay
+      WHERE (
+        -- Search in JSON with original field name (case-insensitive, try different formats)
+        JSON_VALUE(DataJson, '$."${escapedFieldName}"') = @fieldValue
+        OR JSON_VALUE(DataJson, '$."${escapedFieldName.toUpperCase()}"') = @fieldValue
+        OR JSON_VALUE(DataJson, '$."${escapedFieldName.toLowerCase()}"') = @fieldValue
+        OR JSON_VALUE(DataJson, '$."${escapedFieldName}"') = CAST(@fieldValue AS INT)
+        OR JSON_VALUE(DataJson, '$."${escapedFieldName.toUpperCase()}"') = CAST(@fieldValue AS INT)
+        OR JSON_VALUE(DataJson, '$."${escapedFieldName.toLowerCase()}"') = CAST(@fieldValue AS INT)
+        -- Also search in Content field (contains combined text like "250 - ...")
+        OR (Content IS NOT NULL AND (
+          Content LIKE @fieldValuePatternStart
+          OR Content LIKE @fieldValuePatternMiddle
+        ))
+        -- Search in all JSON keys (for sanitized column names like A, B, C...)
+        -- This will find the value in any JSON key
+        OR EXISTS (
+          SELECT 1 
+          FROM OPENJSON(DataJson) 
+          WHERE [value] = @fieldValue 
+             OR [value] = CAST(@fieldValue AS INT)
+             OR CAST([value] AS NVARCHAR(MAX)) = @fieldValue
+        )
+      )
+      ORDER BY ImportedAt DESC
+    `;
+    
+    const params = {
+      topN,
+      fieldValue: fieldValue.toString(),
+      fieldValuePatternStart: `${fieldValue} -%`,  // "250 - ..."
+      fieldValuePatternMiddle: `% - ${fieldValue} -%`  // "... - 250 - ..."
+    };
+    
+    const result = await executeQuery(query, params);
+    const records = result.recordset || [];
+    
+    // Filter records to ensure the value matches the correct field
+    // This is important because Content might contain the value in a different context
+    const filteredRecords = records.filter(record => {
+      try {
+        const data = JSON.parse(record.DataJson || '{}');
+        
+        // Priority 1: Check if the exact field name matches (case-insensitive)
+        for (const key in data) {
+          if (key && (
+            key.toLowerCase() === fieldName.toLowerCase() ||
+            key.toUpperCase() === fieldName.toUpperCase() ||
+            key === fieldName
+          )) {
+            const value = data[key];
+            if (value != null) {
+              const valueStr = value.toString().trim();
+              const fieldValueStr = fieldValue.toString().trim();
+              
+              // Exact match
+              if (valueStr === fieldValueStr) {
+                return true;
+              }
+              
+              // Numeric match
+              if (!isNaN(value) && !isNaN(fieldValue)) {
+                if (parseFloat(value) === parseFloat(fieldValue)) {
+                  return true;
+                }
+              }
+            }
+          }
+        }
+        
+        // Priority 2: Check Content field if it starts with the value (e.g., "250 - ...")
+        // This works for KVA because it's typically the first value in Content
+        if (record.Content) {
+          const contentTrimmed = record.Content.trim();
+          // Check if Content starts with "250 -" (for KVA = 250)
+          if (contentTrimmed.startsWith(fieldValue + ' -') || 
+              contentTrimmed.startsWith(fieldValue + '-')) {
+            // Additional check: if fieldName is KVA and Content starts with the value, it's likely correct
+            if (fieldName.toLowerCase() === 'kva') {
+              return true;
+            }
+          }
+        }
+        
+        return false;
+      } catch (error) {
+        console.warn('Error filtering record:', error);
+        // If we can't parse, include it if Content matches (safer)
+        if (record.Content && record.Content.trim().startsWith(fieldValue + ' ')) {
+          return true;
+        }
+        return false;
+      }
+    });
+    
+    console.log(`✅ Found ${filteredRecords.length} records with ${fieldName} = ${fieldValue} (filtered from ${records.length} total)`);
+    
+    return {
+      records: filteredRecords.map(record => ({
+        ...record,
+        similarity: 1.0, // Exact match = 100% similarity
+        data: JSON.parse(record.DataJson || '{}'),
+        originalColumns: record.OriginalColumns ? JSON.parse(record.OriginalColumns) : []
+      })),
+      totalFound: filteredRecords.length,
+      totalRecords: filteredRecords.length
+    };
+  } catch (error) {
+    console.error('❌ Error searching TSMay by field value:', error);
+    throw error;
+  }
+}
+
+/**
  * Search TSMay data with vector similarity
  * @param {string} question - User question
  * @param {Object} options - Search options
@@ -89,6 +269,13 @@ async function generateAndSaveEmbedding(documentId, data) {
  */
 async function searchTSMayWithVector(question, options = {}) {
   try {
+    // First, check if this is a field value query (e.g., "KVA là 250")
+    const fieldValueQuery = detectFieldValueQuery(question);
+    if (fieldValueQuery) {
+      console.log(`🔍 Detected field value query: ${fieldValueQuery.field} = ${fieldValueQuery.value}`);
+      return await searchTSMayByFieldValue(fieldValueQuery.field, fieldValueQuery.value, options);
+    }
+    
     const {
       similarityThreshold = 0.3,
       topN = 10,

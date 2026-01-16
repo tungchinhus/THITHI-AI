@@ -55,12 +55,14 @@ public class VectorImportController : ControllerBase
                 return BadRequest(new { error = "Chỉ chấp nhận file Excel (.xlsx, .xls)" });
             }
 
-            _logger.LogInformation("Nhận file: {FileName}, Size: {Size} bytes, Table: {TableName}", 
-                file.FileName, file.Length, tableName);
+            _logger.LogInformation("Nhận file: {FileName}, Size: {Size} bytes, Table: {TableName}, Columns: {Columns}", 
+                file.FileName, file.Length, tableName, string.Join(", ", selectedColumns));
 
             // Xử lý file
             using var stream = file.OpenReadStream();
             await _vectorImportService.ProcessExcelImportAsync(stream, tableName, selectedColumns);
+
+            _logger.LogInformation("Import thành công: {FileName} vào bảng {TableName}", file.FileName, tableName);
 
             return Ok(new 
             { 
@@ -70,10 +72,32 @@ public class VectorImportController : ControllerBase
                 columns = selectedColumns
             });
         }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Lỗi validation khi import Excel file");
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex, "Lỗi tham số khi import Excel file");
+            return BadRequest(new { error = ex.Message });
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Lỗi khi import Excel file");
-            return StatusCode(500, new { error = "Lỗi khi xử lý file", details = ex.Message });
+            _logger.LogError(ex, "Lỗi khi import Excel file: {Message}", ex.Message);
+            
+            // Trả về thông báo lỗi chi tiết hơn
+            var errorMessage = "Lỗi khi xử lý file";
+            if (ex.InnerException != null)
+            {
+                errorMessage += $": {ex.InnerException.Message}";
+            }
+            else
+            {
+                errorMessage += $": {ex.Message}";
+            }
+            
+            return StatusCode(500, new { error = errorMessage, details = ex.ToString() });
         }
     }
 

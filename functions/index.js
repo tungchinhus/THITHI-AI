@@ -1911,19 +1911,79 @@ async function searchTSMayData(question) {
         
         if (sqlResult.records && sqlResult.records.length > 0) {
           // Format SQL results similar to Firestore format
-          let tsMayContext = `Tìm thấy ${sqlResult.totalFound} bản ghi trong TSMay (SQL Server):\n\n`;
+          // Remove duplicates based on DocumentId or key fields
+          const uniqueRecords = [];
+          const seenIds = new Set();
+          const seenKeys = new Set();
           
-          sqlResult.records.forEach((record, index) => {
-            tsMayContext += `**Bản ghi ${index + 1}** (ID: ${record.DocumentId}, Similarity: ${(record.similarity * 100).toFixed(2)}%):\n`;
+          sqlResult.records.forEach(record => {
+            const data = record.data || {};
+            // Try to create a unique key from DocumentId or key fields
+            let uniqueKey = record.DocumentId;
+            
+            // If no DocumentId, try to create key from important fields
+            if (!uniqueKey || seenIds.has(uniqueKey)) {
+              const keyFields = ['Số máy', 'Soá maùy', 'B', 'SBB', 'C'];
+              const keyParts = [];
+              for (const field of keyFields) {
+                if (data[field] != null) {
+                  keyParts.push(`${field}:${data[field]}`);
+                }
+              }
+              uniqueKey = keyParts.join('|') || `record_${record.Id}`;
+            }
+            
+            if (!seenKeys.has(uniqueKey)) {
+              seenKeys.add(uniqueKey);
+              seenIds.add(record.DocumentId || uniqueKey);
+              uniqueRecords.push(record);
+            }
+          });
+          
+          let tsMayContext = `Tìm thấy ${sqlResult.totalFound} bản ghi trong TSMay (SQL Server)`;
+          if (uniqueRecords.length < sqlResult.totalFound) {
+            tsMayContext += ` (${uniqueRecords.length} bản ghi duy nhất sau khi loại bỏ trùng lặp)`;
+          }
+          tsMayContext += `:\n\n`;
+          
+          // Show all unique records (limit to top 50 for performance)
+          const displayRecords = uniqueRecords.slice(0, 50);
+          displayRecords.forEach((record, index) => {
+            tsMayContext += `**Bản ghi ${index + 1}**`;
+            if (record.similarity !== undefined && record.similarity < 1.0) {
+              tsMayContext += ` (ID: ${record.DocumentId || record.Id}, Similarity: ${(record.similarity * 100).toFixed(2)}%)`;
+            } else if (record.DocumentId || record.Id) {
+              tsMayContext += ` (ID: ${record.DocumentId || record.Id})`;
+            }
+            tsMayContext += `:\n`;
             
             const data = record.data || {};
-            Object.keys(data).forEach(key => {
-              if (key && data[key] !== null && data[key] !== undefined) {
-                tsMayContext += `  - **${key}**: ${data[key]}\n`;
+            // Show important fields first
+            const importantFields = ['KVA', 'kVA', 'A', 'Số máy', 'Soá maùy', 'B', 'SBB', 'C', 'LSX', 'D', 'TBKT', 'F'];
+            const shownFields = new Set();
+            
+            // Show important fields first
+            importantFields.forEach(field => {
+              if (data[field] != null && !shownFields.has(field)) {
+                tsMayContext += `  - **${field}**: ${data[field]}\n`;
+                shownFields.add(field);
               }
             });
+            
+            // Show other fields
+            Object.keys(data).forEach(key => {
+              if (key && data[key] !== null && data[key] !== undefined && !shownFields.has(key)) {
+                tsMayContext += `  - **${key}**: ${data[key]}\n`;
+                shownFields.add(key);
+              }
+            });
+            
             tsMayContext += `\n`;
           });
+          
+          if (uniqueRecords.length > 50) {
+            tsMayContext += `\n... và còn ${uniqueRecords.length - 50} bản ghi khác.\n`;
+          }
           
           return tsMayContext;
         }
