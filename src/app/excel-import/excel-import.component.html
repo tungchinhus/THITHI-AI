@@ -36,9 +36,57 @@
         </p>
       </div>
 
+      <!-- Import Target Selection -->
+      <div class="mb-4" style="margin-bottom: 1rem;">
+        <label class="block text-sm font-medium text-gray-700 mb-2" style="display: block; font-size: 0.875rem; font-weight: 500; color: #374151; margin-bottom: 0.5rem;">
+          Đích Import
+        </label>
+        <div class="flex gap-4" style="display: flex; gap: 1rem;">
+          <label class="flex items-center cursor-pointer" style="display: flex; align-items: center; cursor: pointer;">
+            <input
+              type="radio"
+              [(ngModel)]="importTarget"
+              value="backend"
+              class="mr-2"
+              style="margin-right: 0.5rem;"
+              [disabled]="isUploading"
+            />
+            <span class="text-sm text-gray-700" style="font-size: 0.875rem; color: #374151;">
+              🗄️ SQL Server (.NET Backend)
+            </span>
+          </label>
+          <label class="flex items-center cursor-pointer" style="display: flex; align-items: center; cursor: pointer;">
+            <input
+              type="radio"
+              [(ngModel)]="importTarget"
+              value="firestore"
+              class="mr-2"
+              style="margin-right: 0.5rem;"
+              [disabled]="isUploading"
+            />
+            <span class="text-sm text-gray-700" style="font-size: 0.875rem; color: #374151;">
+              ☁️ Firestore
+            </span>
+          </label>
+        </div>
+        
+        <!-- Backend Health Status -->
+        <div *ngIf="importTarget === 'backend'" class="mt-2" style="margin-top: 0.5rem;">
+          <span *ngIf="backendHealthStatus === 'checking'" class="text-xs text-gray-500" style="font-size: 0.75rem; color: #6b7280;">
+            🔄 Đang kiểm tra kết nối...
+          </span>
+          <span *ngIf="backendHealthStatus === 'ok'" class="text-xs text-green-600" style="font-size: 0.75rem; color: #059669;">
+            ✅ Backend đang hoạt động
+          </span>
+          <span *ngIf="backendHealthStatus === 'error'" class="text-xs text-red-600" style="font-size: 0.75rem; color: #dc2626;">
+            ❌ Không thể kết nối đến Backend. Vui lòng kiểm tra server đang chạy tại http://localhost:5000
+          </span>
+        </div>
+      </div>
+
       <!-- Database and Table Name -->
       <div class="grid grid-cols-2 gap-4 mb-4" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
-        <div>
+        <div *ngIf="importTarget === 'firestore'">
           <label class="block text-sm font-medium text-gray-700 mb-2" style="display: block; font-size: 0.875rem; font-weight: 500; color: #374151; margin-bottom: 0.5rem;">
             Tên Database
           </label>
@@ -50,9 +98,9 @@
             readonly
           />
         </div>
-        <div>
+        <div [class.col-span-2]="importTarget === 'backend'" [class.col-span-1]="importTarget === 'firestore'">
           <label class="block text-sm font-medium text-gray-700 mb-2" style="display: block; font-size: 0.875rem; font-weight: 500; color: #374151; margin-bottom: 0.5rem;">
-            Tên Bảng (TSMay)
+            Tên Bảng
           </label>
           <input
             type="text"
@@ -62,6 +110,9 @@
             placeholder="TSMay"
             [disabled]="isUploading"
           />
+          <p class="text-xs text-gray-500 mt-1" style="font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem;">
+            Tên bảng sẽ được tạo tự động trong SQL Server
+          </p>
         </div>
       </div>
 
@@ -256,17 +307,44 @@
     <div class="bg-white rounded-lg shadow-md p-6" style="background-color: #ffffff; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 1.5rem;">
       <button
         (click)="importToFirestore()"
-        [disabled]="!isAuthenticated || !selectedFile || columns.length === 0 || getSelectedColumnsCount() === 0 || isUploading"
+        [disabled]="
+          (importTarget === 'firestore' && !isAuthenticated) || 
+          (importTarget === 'backend' && backendHealthStatus !== 'ok') ||
+          !selectedFile || 
+          columns.length === 0 || 
+          getSelectedColumnsCount() === 0 || 
+          isUploading
+        "
         class="w-full px-6 py-3 bg-indigo-600 text-white rounded-md font-semibold hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
         style="width: 100%; padding: 0.75rem 1.5rem; background-color: #4f46e5; color: #ffffff; border-radius: 0.375rem; font-weight: 600; border: none; cursor: pointer; transition: background-color 0.2s;"
-        [style.background-color]="(!isAuthenticated || !selectedFile || columns.length === 0 || getSelectedColumnsCount() === 0 || isUploading) ? '#9ca3af' : '#4f46e5'"
-        [style.cursor]="(!isAuthenticated || !selectedFile || columns.length === 0 || getSelectedColumnsCount() === 0 || isUploading) ? 'not-allowed' : 'pointer'"
+        [style.background-color]="
+          ((importTarget === 'firestore' && !isAuthenticated) || 
+          (importTarget === 'backend' && backendHealthStatus !== 'ok') ||
+          !selectedFile || 
+          columns.length === 0 || 
+          getSelectedColumnsCount() === 0 || 
+          isUploading) ? '#9ca3af' : '#4f46e5'
+        "
+        [style.cursor]="
+          ((importTarget === 'firestore' && !isAuthenticated) || 
+          (importTarget === 'backend' && backendHealthStatus !== 'ok') ||
+          !selectedFile || 
+          columns.length === 0 || 
+          getSelectedColumnsCount() === 0 || 
+          isUploading) ? 'not-allowed' : 'pointer'
+        "
       >
-        <span *ngIf="!isUploading">📤 Import vào Firestore</span>
+        <span *ngIf="!isUploading">
+          <span *ngIf="importTarget === 'backend'">📤 Import vào SQL Server</span>
+          <span *ngIf="importTarget === 'firestore'">📤 Import vào Firestore</span>
+        </span>
         <span *ngIf="isUploading">⏳ Đang import...</span>
       </button>
-      <p *ngIf="!isAuthenticated" class="text-sm text-gray-500 mt-2 text-center" style="font-size: 0.875rem; color: #6b7280; margin-top: 0.5rem; text-align: center;">
+      <p *ngIf="importTarget === 'firestore' && !isAuthenticated" class="text-sm text-gray-500 mt-2 text-center" style="font-size: 0.875rem; color: #6b7280; margin-top: 0.5rem; text-align: center;">
         Vui lòng đăng nhập để sử dụng tính năng này
+      </p>
+      <p *ngIf="importTarget === 'backend' && backendHealthStatus !== 'ok'" class="text-sm text-red-500 mt-2 text-center" style="font-size: 0.875rem; color: #dc2626; margin-top: 0.5rem; text-align: center;">
+        Vui lòng đảm bảo .NET Backend đang chạy tại http://localhost:5000
       </p>
     </div>
   </main>

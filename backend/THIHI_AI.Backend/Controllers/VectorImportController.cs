@@ -78,6 +78,62 @@ public class VectorImportController : ControllerBase
     }
 
     /// <summary>
+    /// Re-import Content từ Excel file (chỉ update Content, không vectorize lại)
+    /// Dùng để fix các records đã có VectorJson nhưng Content rỗng
+    /// </summary>
+    [HttpPost("reimport-content")]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> ReimportContent(
+        [FromForm] IFormFile file,
+        [FromForm] string tableName,
+        [FromForm] List<string> selectedColumns)
+    {
+        try
+        {
+            if (file == null || file.Length == 0)
+            {
+                return BadRequest(new { error = "File không được để trống" });
+            }
+
+            if (string.IsNullOrWhiteSpace(tableName))
+            {
+                return BadRequest(new { error = "Tên bảng không được để trống" });
+            }
+
+            if (selectedColumns == null || !selectedColumns.Any())
+            {
+                return BadRequest(new { error = "Phải chọn ít nhất một cột" });
+            }
+
+            var allowedExtensions = new[] { ".xlsx", ".xls" };
+            var fileExtension = Path.GetExtension(file.FileName).ToLowerInvariant();
+            if (!allowedExtensions.Contains(fileExtension))
+            {
+                return BadRequest(new { error = "Chỉ chấp nhận file Excel (.xlsx, .xls)" });
+            }
+
+            _logger.LogInformation("Re-import Content từ file: {FileName}, Table: {TableName}", 
+                file.FileName, tableName);
+
+            using var stream = file.OpenReadStream();
+            var updatedCount = await _vectorImportService.ReimportContentAsync(stream, tableName, selectedColumns);
+
+            return Ok(new
+            {
+                message = "Đã cập nhật Content thành công",
+                updatedCount = updatedCount,
+                fileName = file.FileName,
+                tableName = tableName
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Lỗi khi re-import Content");
+            return StatusCode(500, new { error = "Lỗi khi cập nhật Content", details = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Test endpoint để kiểm tra service hoạt động
     /// </summary>
     [HttpGet("health")]
@@ -86,3 +142,4 @@ public class VectorImportController : ControllerBase
         return Ok(new { status = "OK", service = "VectorImportService" });
     }
 }
+

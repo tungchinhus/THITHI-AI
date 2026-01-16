@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 import * as XLSX from 'xlsx';
 import { ExcelImportService } from './excel-import.service';
+import { ExcelImportBackendService } from './excel-import-backend.service';
 import { getFirebaseAuth, getFirebaseApp } from '../firebase.config';
 import { onAuthStateChanged, User, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut } from 'firebase/auth';
 import { environment } from '../../environments/environment';
@@ -42,11 +43,31 @@ export class ExcelImportComponent implements OnInit {
   generateEmbeddings: boolean = true; // Mặc định bật generate embeddings
   embeddingProgress: number = 0;
   isGeneratingEmbeddings: boolean = false;
+  importTarget: 'firestore' | 'backend' = 'backend'; // Mặc định import vào .NET Backend
+  backendHealthStatus: 'checking' | 'ok' | 'error' | null = null;
 
-  constructor(private excelImportService: ExcelImportService) {}
+  constructor(
+    private excelImportService: ExcelImportService,
+    private excelImportBackendService: ExcelImportBackendService
+  ) {}
 
   ngOnInit(): void {
     this.initializeAuth();
+    this.checkBackendHealth();
+  }
+
+  checkBackendHealth(): void {
+    this.backendHealthStatus = 'checking';
+    this.excelImportBackendService.checkHealth().subscribe({
+      next: (response) => {
+        console.log('Backend health check:', response);
+        this.backendHealthStatus = 'ok';
+      },
+      error: (error) => {
+        console.error('Backend health check failed:', error);
+        this.backendHealthStatus = 'error';
+      }
+    });
   }
 
   initializeAuth(): void {
@@ -311,12 +332,6 @@ export class ExcelImportComponent implements OnInit {
   }
 
   async importToFirestore(): Promise<void> {
-    // Kiểm tra authentication trước
-    if (!this.isAuthenticated || !this.user) {
-      alert('⚠️ Bạn chưa đăng nhập. Vui lòng đăng nhập để import dữ liệu.\n\nQuay lại trang Chat để đăng nhập.');
-      return;
-    }
-
     if (!this.selectedFile) {
       alert('Vui lòng chọn file Excel trước.');
       return;
@@ -333,6 +348,18 @@ export class ExcelImportComponent implements OnInit {
       return;
     }
 
+    // Import vào .NET Backend
+    if (this.importTarget === 'backend') {
+      await this.importToBackend();
+      return;
+    }
+
+    // Import vào Firestore (code cũ)
+    if (!this.isAuthenticated || !this.user) {
+      alert('⚠️ Bạn chưa đăng nhập. Vui lòng đăng nhập để import dữ liệu.\n\nQuay lại trang Chat để đăng nhập.');
+      return;
+    }
+
     // Lọc dữ liệu chỉ lấy các cột đã chọn
     const filteredData = this.excelData.map(row => {
       const filteredRow: ExcelRow = {};
@@ -344,7 +371,7 @@ export class ExcelImportComponent implements OnInit {
 
     this.isUploading = true;
     this.uploadProgress = 0;
-    this.uploadMessage = 'Đang import dữ liệu...';
+    this.uploadMessage = 'Đang import dữ liệu vào Firestore...';
 
     try {
       // Import dữ liệu vào Firestore
@@ -391,7 +418,7 @@ export class ExcelImportComponent implements OnInit {
         }
       }
 
-      // Reset form sau 5 giây (tăng thời gian để user thấy thông báo embeddings)
+      // Reset form sau 5 giây
       setTimeout(() => {
         this.resetForm();
       }, 5000);
@@ -400,6 +427,59 @@ export class ExcelImportComponent implements OnInit {
       this.uploadMessage = `❌ Lỗi: ${error.message || 'Không thể import dữ liệu'}`;
       alert(`Lỗi khi import: ${error.message || 'Không thể import dữ liệu'}`);
     } finally {
+      this.isUploading = false;
+    }
+  }
+
+  async importToBackend(): Promise<void> {
+    if (!this.selectedFile) {
+      alert('Vui lòng chọn file Excel trước.');
+      return;
+    }
+
+    const selectedColumns = this.getSelectedColumns();
+    if (selectedColumns.length === 0) {
+      alert('Vui lòng chọn ít nhất một cột để import.');
+      return;
+    }
+
+    if (!this.tableName.trim()) {
+      alert('Vui lòng nhập tên bảng.');
+      return;
+    }
+
+    this.isUploading = true;
+    this.uploadProgress = 0;
+    this.uploadMessage = 'Đang import dữ liệu vào SQL Server...';
+
+    try {
+      this.excelImportBackendService.importExcelToBackend(
+        this.selectedFile,
+        this.tableName,
+        selectedColumns
+      ).subscribe({
+        next: (response) => {
+          this.uploadProgress = 100;
+          this.uploadMessage = `✅ ${response.message}\n\n📊 File: ${response.fileName}\n📋 Bảng: ${response.tableName}\n📝 Cột: ${response.columns.join(', ')}`;
+          
+          // Reset form sau 5 giây
+          setTimeout(() => {
+            this.resetForm();
+          }, 5000);
+        },
+        error: (error) => {
+          console.error('Lỗi khi import:', error);
+          const errorMessage = error.error?.error || error.message || 'Không thể import dữ liệu';
+          this.uploadMessage = `❌ Lỗi: ${errorMessage}`;
+          alert(`Lỗi khi import: ${errorMessage}`);
+        },
+        complete: () => {
+          this.isUploading = false;
+        }
+      });
+    } catch (error: any) {
+      console.error('Lỗi khi import:', error);
+      this.uploadMessage = `❌ Lỗi: ${error.message || 'Không thể import dữ liệu'}`;
       this.isUploading = false;
     }
   }

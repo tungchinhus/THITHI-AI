@@ -12,9 +12,11 @@ const crypto = require("crypto");
 // SQL Server integration (optional - only if SQL_SERVER_HOST is configured)
 let sqlConnection = null;
 let sqlTSMayService = null;
+let sqlChatMemoryService = null;
 try {
   sqlConnection = require('./sql-connection');
   sqlTSMayService = require('./sql-tsmay-service');
+  sqlChatMemoryService = require('./sql-chat-memory-service');
   console.log('✅ SQL Server modules loaded');
 } catch (error) {
   console.warn('⚠️ SQL Server modules not available (optional):', error.message);
@@ -360,6 +362,92 @@ exports.chatFunction = onRequest(
 
       // Get question, Microsoft access token, chat history, and user info from request body
       const {question, microsoftAccessToken, chatHistory, userInfo} = req.body;
+      
+      // Initialize SQL Server connection pool if available
+      let sqlPoolInitialized = false;
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:368',message:'Checking SQL Server config',data:{hasSqlConnection:!!sqlConnection,hasSqlHost:!!process.env.SQL_SERVER_HOST,hasSqlUser:!!process.env.SQL_SERVER_USER,hasSqlPassword:!!process.env.SQL_SERVER_PASSWORD,hasSqlDatabase:!!process.env.SQL_SERVER_DATABASE},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      if (sqlConnection && process.env.SQL_SERVER_HOST) {
+        try {
+          const pool = sqlConnection.getSQLPool();
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:371',message:'Pool status before init',data:{poolExists:!!pool,poolConnected:pool?.connected},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          // #endregion
+          if (!pool || !pool.connected) {
+            // #region agent log
+            fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:373',message:'Initializing SQL pool',data:{server:process.env.SQL_SERVER_HOST,database:process.env.SQL_SERVER_DATABASE||'THITHI_AI',port:parseInt(process.env.SQL_SERVER_PORT||'1433')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+            await sqlConnection.initializeSQLPool({
+              server: process.env.SQL_SERVER_HOST,
+              user: process.env.SQL_SERVER_USER,
+              password: process.env.SQL_SERVER_PASSWORD,
+              database: process.env.SQL_SERVER_DATABASE || 'THITHI_AI',
+              port: parseInt(process.env.SQL_SERVER_PORT || '1433'),
+              encrypt: process.env.SQL_SERVER_ENCRYPT !== 'false'
+            });
+            sqlPoolInitialized = true;
+            // #region agent log
+            fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:380',message:'Pool initialized successfully',data:{sqlPoolInitialized},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+            console.log('✅ SQL Server connection pool initialized for chat memory');
+          } else {
+            sqlPoolInitialized = true;
+            // #region agent log
+            fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:383',message:'Pool already connected',data:{sqlPoolInitialized},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+          }
+        } catch (sqlError) {
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:385',message:'Pool init failed',data:{error:sqlError.message,stack:sqlError.stack?.substring(0,200),sqlPoolInitialized},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          // #endregion
+          console.warn('⚠️ Failed to initialize SQL Server connection pool:', sqlError.message);
+          sqlPoolInitialized = false;
+        }
+      } else {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:388',message:'SQL Server not configured',data:{hasSqlConnection:!!sqlConnection,hasSqlHost:!!process.env.SQL_SERVER_HOST},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+      }
+      
+      // Initialize chat memory service if SQL Server is available
+      let chatSessionId = null;
+      const userId = userInfo?.email || userInfo?.uid || 'anonymous';
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:393',message:'Initializing chat memory service',data:{hasService:!!sqlChatMemoryService,sqlPoolInitialized,userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      if (sqlChatMemoryService && sqlPoolInitialized) {
+        try {
+          // Initialize embedding function for chat memory
+          sqlChatMemoryService.initializeEmbeddingFunctions(generateEmbedding);
+          
+          // Get or create chat session
+          const sessionTitle = question.substring(0, 100); // Use first 100 chars as title
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:400',message:'Creating chat session',data:{userId,sessionTitle:sessionTitle.substring(0,50)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
+          chatSessionId = await sqlChatMemoryService.upsertChatSession(userId, sessionTitle);
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:402',message:'Session created',data:{chatSessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
+          console.log('✅ Chat session initialized:', chatSessionId);
+        } catch (error) {
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:404',message:'Session creation failed',data:{error:error.message,stack:error.stack?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
+          console.warn('⚠️ Failed to initialize chat memory service:', error.message);
+          console.warn('   Error details:', error.stack?.substring(0, 200));
+        }
+      } else {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:409',message:'Chat memory service not available',data:{hasService:!!sqlChatMemoryService,sqlPoolInitialized,hasHost:!!process.env.SQL_SERVER_HOST},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        console.log('ℹ️ Chat memory service not available:', {
+          hasService: !!sqlChatMemoryService,
+          sqlPoolInitialized,
+          hasHost: !!process.env.SQL_SERVER_HOST
+        });
+      }
 
       // Validate question
       if (!question || typeof question !== "string" || question.trim() === "") {
@@ -773,6 +861,37 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
                 ? chatHistory.slice(-50)
                 : [];
               
+              // 2a. Search chat memory for deep context (if SQL Server is available)
+              let memoryContext = '';
+              if (sqlChatMemoryService && sqlPoolInitialized && userInfo) {
+                try {
+                  const similarMemories = await sqlChatMemoryService.searchChatMemory(userId, question, {
+                    similarityThreshold: 0.4,
+                    topN: 5,
+                    sessionId: chatSessionId
+                  });
+                  
+                  if (similarMemories && similarMemories.length > 0) {
+                    memoryContext = `\n### THÔNG TIN TỪ LỊCH SỬ CHAT TRƯỚC ĐÓ (Nhớ sâu):\n`;
+                    similarMemories.forEach((memory, index) => {
+                      memoryContext += `${index + 1}. [${memory.contentType}] ${memory.content.substring(0, 200)}${memory.content.length > 200 ? '...' : ''} (Similarity: ${(memory.similarity * 100).toFixed(1)}%)\n`;
+                    });
+                    memoryContext += `\nSử dụng thông tin từ lịch sử chat trên để hiểu ngữ cảnh và trả lời chính xác hơn.\n`;
+                    console.log(`✅ Found ${similarMemories.length} relevant memories from chat history`);
+                  } else {
+                    console.log('ℹ️ No similar memories found in chat history');
+                  }
+                } catch (memoryError) {
+                  console.warn('⚠️ Error searching chat memory:', memoryError.message);
+                  console.warn('   Error stack:', memoryError.stack?.substring(0, 200));
+                }
+              } else {
+                // Fallback: Use chatHistory from request for context
+                if (recentHistory && recentHistory.length > 0) {
+                  console.log('ℹ️ Using chatHistory from request (SQL Server not available)');
+                }
+              }
+              
               if (recentHistory.length > 0) {
                 console.log(`✅ Preparing chat history for prompt: ${recentHistory.length} messages`);
               } else {
@@ -840,7 +959,12 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
                 console.log('✅ TSMay context prepared for prompt:', tsMayContext.substring(0, 200));
               }
 
-              if (!combinedContext) {
+              // Add memory context to combined context
+              if (memoryContext) {
+                combinedContext = memoryContext + '\n' + combinedContext;
+              }
+              
+              if (!combinedContext && !memoryContext) {
                 combinedContext = 'Không có tài liệu tham khảo từ email, OneDrive hoặc TSMay.';
               }
 
@@ -986,6 +1110,28 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
                       // Lưu các field khác
                       analysis = parsedResponse.analysis || '';
                       suggestions = Array.isArray(parsedResponse.suggestions) ? parsedResponse.suggestions : [];
+                      
+                      // Enhance suggestions with context-aware suggestions from chat memory
+                      if (sqlChatMemoryService && sqlPoolInitialized && userInfo && suggestions.length < 3) {
+                        try {
+                          const contextAwareSuggestions = await sqlChatMemoryService.getContextAwareSuggestions(
+                            userId,
+                            question,
+                            {
+                              maxSuggestions: 3 - suggestions.length,
+                              sessionId: chatSessionId
+                            }
+                          );
+                          
+                          if (contextAwareSuggestions && contextAwareSuggestions.length > 0) {
+                            suggestions = [...suggestions, ...contextAwareSuggestions].slice(0, 3);
+                            console.log(`✅ Enhanced suggestions with ${contextAwareSuggestions.length} context-aware suggestions`);
+                          }
+                        } catch (suggestionError) {
+                          console.warn('⚠️ Error getting context-aware suggestions:', suggestionError.message);
+                        }
+                      }
+                      
                       console.log('✅ Parsed JSON response successfully');
                       console.log('   - Analysis:', analysis ? analysis.substring(0, 50) + '...' : 'N/A');
                       console.log('   - Citations:', sources.length);
@@ -1088,6 +1234,133 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
         ...(analysis && { analysis }),
         ...(suggestions.length > 0 && { suggestions })
       };
+
+      // Save chat memory to database (async, don't wait)
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1203',message:'Checking save memory conditions',data:{hasService:!!sqlChatMemoryService,sqlPoolInitialized,hasUserInfo:!!userInfo,hasSessionId:!!chatSessionId,userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
+      if (sqlChatMemoryService && sqlPoolInitialized && userInfo) {
+        try {
+          // Save user question
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1206',message:'Saving user memory',data:{userId,questionLength:question.length,chatSessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          const userMemoryId = await sqlChatMemoryService.saveChatMemory(
+            userId,
+            question,
+            'user',
+            chatSessionId,
+            {
+              timestamp: new Date().toISOString(),
+              suggestions: suggestions // Store suggestions in metadata for future use
+            }
+          );
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1215',message:'User memory saved',data:{userMemoryId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          
+          // Save assistant answer
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1218',message:'Saving assistant memory',data:{userId,answerLength:answer.length,chatSessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          const assistantMemoryId = await sqlChatMemoryService.saveChatMemory(
+            userId,
+            answer,
+            'assistant',
+            chatSessionId,
+            {
+              timestamp: new Date().toISOString(),
+              citations: sources,
+              suggestions: suggestions
+            }
+          );
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1228',message:'Assistant memory saved',data:{assistantMemoryId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          
+          console.log('✅ Chat memory saved to database:', {
+            sessionId: chatSessionId,
+            userMemoryId,
+            assistantMemoryId
+          });
+        } catch (memoryError) {
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1235',message:'Memory save failed',data:{error:memoryError.message,stack:memoryError.stack?.substring(0,300),name:memoryError.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+          // #endregion
+          console.warn('⚠️ Error saving chat memory:', memoryError.message);
+          console.warn('   Error stack:', memoryError.stack?.substring(0, 200));
+          // Don't fail the request if memory save fails
+        }
+      } else {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:1240',message:'Skipping SQL save, using fallback',data:{hasService:!!sqlChatMemoryService,sqlPoolInitialized,hasUserInfo:!!userInfo},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+      } else {
+        // Fallback: Save to Firestore if SQL Server not available
+        if (userInfo && db) {
+          try {
+            const memoryRef = db.collection('chatMemory');
+            const sessionRef = db.collection('chatSessions');
+            
+            // Get or create session
+            let sessionDoc = null;
+            const sessionQuery = await sessionRef.where('userId', '==', userId).where('isActive', '==', true).limit(1).get();
+            
+            if (!sessionQuery.empty) {
+              sessionDoc = sessionQuery.docs[0];
+            } else {
+              // Create new session
+              sessionDoc = await sessionRef.add({
+                userId: userId,
+                title: question.substring(0, 100),
+                startedAt: admin.firestore.FieldValue.serverTimestamp(),
+                lastActivityAt: admin.firestore.FieldValue.serverTimestamp(),
+                messageCount: 0,
+                isActive: true
+              });
+            }
+            
+            const sessionId = sessionDoc.id;
+            
+            // Save user message
+            await memoryRef.add({
+              userId: userId,
+              sessionId: sessionId,
+              content: question,
+              contentType: 'user',
+              metadata: {
+                timestamp: new Date().toISOString(),
+                suggestions: suggestions
+              },
+              createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            
+            // Save assistant message
+            await memoryRef.add({
+              userId: userId,
+              sessionId: sessionId,
+              content: answer,
+              contentType: 'assistant',
+              metadata: {
+                timestamp: new Date().toISOString(),
+                citations: sources,
+                suggestions: suggestions
+              },
+              createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            
+            // Update session
+            await sessionRef.doc(sessionId).update({
+              lastActivityAt: admin.firestore.FieldValue.serverTimestamp(),
+              messageCount: admin.firestore.FieldValue.increment(2)
+            });
+            
+            console.log('✅ Chat memory saved to Firestore (fallback):', sessionId);
+          } catch (firestoreError) {
+            console.warn('⚠️ Error saving chat memory to Firestore:', firestoreError.message);
+          }
+        }
+      }
 
       // Return success response
       return res.status(200).json(response);

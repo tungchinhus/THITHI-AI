@@ -5,6 +5,7 @@ import { catchError, switchMap } from 'rxjs/operators';
 import { Auth, onAuthStateChanged } from 'firebase/auth';
 import { getFirebaseAuth } from '../firebase.config';
 import { environment } from '../../environments/environment';
+import { VectorSearchService, SearchResponse } from '../services/vector-search.service';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -33,6 +34,7 @@ export interface ChatResponse {
   citations?: string[];
   analysis?: string;
   suggestions?: string[];
+  vectorSearchResults?: SearchResponse; // Kết quả vector search nếu có
 }
 
 @Injectable({
@@ -42,7 +44,10 @@ export class ChatService {
   private auth: Auth | null = null;
   private apiUrl: string = ''; // Set your Firebase Function URL here
 
-  constructor(private http: HttpClient) {
+  constructor(
+    private http: HttpClient,
+    private vectorSearchService: VectorSearchService
+  ) {
     this.initializeFirebase();
   }
 
@@ -158,6 +163,18 @@ export class ChatService {
    */
   setApiUrl(url: string): void {
     this.apiUrl = url;
+  }
+
+  /**
+   * Tìm kiếm với vector similarity (có thể dùng để enhance AI response)
+   */
+  searchVector(
+    query: string,
+    tableName: string = 'TSMay',
+    topN: number = 5,
+    similarityThreshold: number = 0.3
+  ): Observable<SearchResponse> {
+    return this.vectorSearchService.search(query, tableName, topN, similarityThreshold);
   }
 
   /**

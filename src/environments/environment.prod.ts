@@ -40,6 +40,9 @@ export const environment = {
   // Lưu ý: Angular không hỗ trợ process.env trong browser
   // Sử dụng file replacement trong angular.json để thay thế giá trị khi build
   microsoftClientId: "YOUR_MICROSOFT_CLIENT_ID",
-  microsoftTenantId: "YOUR_MICROSOFT_TENANT_ID"
+  microsoftTenantId: "YOUR_MICROSOFT_TENANT_ID",
+  
+  // .NET Backend API URL
+  backendApiUrl: "http://localhost:5000"
 };
 

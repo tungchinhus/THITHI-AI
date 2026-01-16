@@ -39,5 +39,8 @@ export const environment = {
   microsoftClientId: "YOUR_MICROSOFT_CLIENT_ID",
   // Tenant ID: "common" = hỗ trợ multi-tenant (bất kỳ Microsoft account nào)
   // Hoặc dùng specific tenant ID nếu chỉ muốn 1 tenant
-  microsoftTenantId: "common"
+  microsoftTenantId: "common",
+  
+  // .NET Backend API URL
+  backendApiUrl: "http://localhost:5000"
 };

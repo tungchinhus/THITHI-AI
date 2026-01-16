@@ -5,6 +5,7 @@ import { RouterModule } from '@angular/router';
 import { MarkdownModule } from 'ngx-markdown';
 import { ChatService } from './chat.service';
 import { TelegramAuthService } from '../telegram-auth.service';
+import { VectorSearchService, SearchResult } from '../services/vector-search.service';
 import { getFirebaseAuth, getFirebaseApp } from '../firebase.config';
 import { signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { environment } from '../../environments/environment';
@@ -59,7 +60,8 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
   constructor(
     private chatService: ChatService,
-    private telegramAuthService: TelegramAuthService
+    private telegramAuthService: TelegramAuthService,
+    private vectorSearchService: VectorSearchService
   ) {}
 
   ngOnInit(): void {
@@ -1088,15 +1090,72 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
     // Get user info for personalization
     const userInfo = this.getUserInfo();
     
+    // Check if this is a data query and perform vector search
+    const isDataQuery = this.isDataQuery(message);
+    let enhancedMessage = message;
+    let vectorSearchResults: SearchResult[] = [];
+    
+    if (isDataQuery) {
+      console.log('🔍 Detected data query, performing vector search...');
+      // Perform vector search first
+      this.vectorSearchService.search(message, 'TSMay', 5, 0.3).subscribe({
+        next: (searchResponse) => {
+          if (searchResponse.results && searchResponse.results.length > 0) {
+            vectorSearchResults = searchResponse.results;
+            console.log(`✅ Found ${searchResponse.results.length} results from vector search`);
+            
+            // Enhance message with search results for AI context
+            const searchContext = this.formatSearchResultsForAI(searchResponse.results);
+            enhancedMessage = `${message}\n\n[Dữ liệu tìm được từ hệ thống:\n${searchContext}]`;
+            
+            // Continue with enhanced message
+            this.sendMessageWithContext(enhancedMessage, validToken, chatHistory, userInfo, vectorSearchResults);
+          } else {
+            console.log('⚠️ No results from vector search, proceeding with original message');
+            // No results, proceed with original message
+            this.sendMessageWithContext(message, validToken, chatHistory, userInfo, []);
+          }
+        },
+        error: (error) => {
+          console.error('Error in vector search:', error);
+          // If search fails, proceed with original message
+          this.sendMessageWithContext(message, validToken, chatHistory, userInfo, []);
+        }
+      });
+      return; // Exit early, sendMessageWithContext will handle the rest
+    }
+    
+    // Not a data query, proceed normally
+    this.sendMessageWithContext(message, validToken, chatHistory, userInfo, []);
+  }
+
+  /**
+   * Send message with vector search context
+   */
+  private sendMessageWithContext(
+    message: string,
+    validToken: string | undefined,
+    chatHistory: any[],
+    userInfo: any,
+    vectorSearchResults: SearchResult[]
+  ): void {
     this.chatService.sendMessage(message, validToken, chatHistory, userInfo).subscribe({
       next: (response) => {
         this.isLoading = false;
         
         // Parse response - Backend đã parse JSON, nhưng đảm bảo xử lý đúng
         // Backend trả về: { answer, citations, suggestions, analysis, sources }
+        let aiContent = response.answer || response.content || response.message || 'Không có phản hồi';
+        
+        // If we have vector search results, enhance the response
+        if (vectorSearchResults.length > 0) {
+          const searchInfo = this.formatSearchResultsForDisplay(vectorSearchResults);
+          aiContent += `\n\n---\n\n**📊 Kết quả tìm kiếm từ hệ thống:**\n${searchInfo}`;
+        }
+        
         const aiResponse: Message = {
           role: 'assistant',
-          content: response.answer || response.content || response.message || 'Không có phản hồi',
+          content: aiContent,
           sources: response.sources || response.citations || [],
           citations: response.citations || response.sources || [],
           suggestions: response.suggestions || [],
@@ -1109,6 +1168,9 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         }
         if (response.citations && response.citations.length > 0) {
           console.log('✅ Received citations:', response.citations);
+        }
+        if (vectorSearchResults.length > 0) {
+          console.log('✅ Including vector search results in response');
         }
 
         this.messages.push(aiResponse);
@@ -1123,11 +1185,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
             this.messageInput.nativeElement.focus();
           }
         }, 100);
-        
-        // Text-to-speech đã được tắt
-        // if (wasVoiceMessage) {
-        //   this.speak(aiResponse.content);
-        // }
       },
       error: (error) => {
         this.isLoading = false;
@@ -1163,6 +1220,45 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         }, 100);
       }
     });
+  }
+
+  /**
+   * Kiểm tra xem câu hỏi có liên quan đến dữ liệu không
+   */
+  private isDataQuery(message: string): boolean {
+    const lowerMessage = message.toLowerCase();
+    
+    // Keywords liên quan đến tìm kiếm dữ liệu
+    const dataKeywords = [
+      'số máy', 'mã máy', 'máy số', 'máy',
+      'thông số', 'thông tin', 'chi tiết',
+      'tìm', 'tìm kiếm', 'search',
+      'tsmay', 'thiết bị', 'equipment',
+      'model', 'công suất', 'hp', 'kw',
+      'cho tôi', 'cung cấp', 'hiển thị',
+      't000', 't00', 'mã số'
+    ];
+    
+    return dataKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  /**
+   * Format search results cho AI context
+   */
+  private formatSearchResultsForAI(results: SearchResult[]): string {
+    return results.map((result, index) => {
+      return `${index + 1}. ${result.content} (Similarity: ${(result.similarity * 100).toFixed(1)}%)`;
+    }).join('\n');
+  }
+
+  /**
+   * Format search results cho hiển thị
+   */
+  private formatSearchResultsForDisplay(results: SearchResult[]): string {
+    return results.map((result, index) => {
+      const similarityPercent = (result.similarity * 100).toFixed(1);
+      return `${index + 1}. **${result.content}** (Độ tương đồng: ${similarityPercent}%)`;
+    }).join('\n');
   }
 
   onEnterKey(event: Event): void {

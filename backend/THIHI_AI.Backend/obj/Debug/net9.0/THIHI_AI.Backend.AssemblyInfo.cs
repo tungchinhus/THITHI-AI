@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("THIHI_AI.Backend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6fb872987b4dcca45b054f5013145babb5c71c3c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ba2aca4340c665a7a9b9ec6f0fc721557e850cd5")]
 [assembly: System.Reflection.AssemblyProductAttribute("THIHI_AI.Backend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("THIHI_AI.Backend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

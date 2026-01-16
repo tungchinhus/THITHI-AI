@@ -16,10 +16,45 @@ Hệ thống backend gồm 2 phần:
 
 ## 🚀 Quick Start
 
-### Bước 1: Chạy Python API
+### Cách 1: Start Tự Động (Khuyến nghị) ⚡
+
+**Windows Batch:**
+```bash
+start-all-services.bat
+```
+
+**PowerShell:**
+```powershell
+.\start-all-services.ps1
+```
+
+Script sẽ tự động mở 2 cửa sổ riêng biệt:
+- Python Vectorize API (Port 5005)
+- .NET Backend API (Port 5000)
+
+**Kiểm tra trạng thái:**
+```bash
+check-services.bat
+```
+
+**Dừng tất cả services:**
+```bash
+stop-all-services.bat
+```
+
+### Cách 2: Start Thủ Công
+
+#### Bước 1: Chạy Python API
 
 ```powershell
 cd python-api
+start-simple.bat
+```
+
+Hoặc:
+```powershell
+cd python-api
+venv\Scripts\activate
 python app.py
 ```
 
@@ -27,7 +62,7 @@ python app.py
 
 Khi thấy log: `Running on http://0.0.0.0:5005` → ✅ Python API đã sẵn sàng!
 
-### Bước 2: Chạy .NET Backend
+#### Bước 2: Chạy .NET Backend
 
 Mở terminal mới:
 
@@ -38,7 +73,7 @@ dotnet run
 
 Khi thấy log: `Now listening on: http://localhost:5000` → ✅ .NET Backend đã sẵn sàng!
 
-### Bước 3: Test
+#### Bước 3: Test
 
 ```powershell
 # Test Python API
@@ -347,6 +382,57 @@ GO
 3. **Thêm error handling** và retry logic
 4. **Implement search** với vector similarity
 5. **Deploy lên production** (Azure, AWS, etc.)
+
+## 🛠️ Scripts Tiện Ích
+
+### `start-all-services.bat` / `start-all-services.ps1`
+Start cả Python API và .NET Backend cùng lúc trong 2 cửa sổ riêng biệt.
+
+**Sử dụng:**
+```bash
+# Windows Batch
+start-all-services.bat
+
+# PowerShell
+.\start-all-services.ps1
+```
+
+### `stop-all-services.bat`
+Dừng tất cả services đang chạy trên port 5000 và 5005.
+
+**Sử dụng:**
+```bash
+stop-all-services.bat
+```
+
+### `check-services.bat`
+Kiểm tra trạng thái của các services và test health endpoints.
+
+**Sử dụng:**
+```bash
+check-services.bat
+```
+
+**Output mẫu:**
+```
+========================================
+  Checking Services Status
+========================================
+
+Checking Python API (Port 5005)...
+[OK] Python API is running
+
+Checking .NET Backend (Port 5000)...
+[OK] .NET Backend is running
+
+Testing endpoints...
+
+Testing Python API health...
+[OK] Python API health check passed
+
+Testing .NET Backend health...
+[OK] .NET Backend health check passed
+```
 
 ## 📚 Tài Liệu Tham Khảo
 
