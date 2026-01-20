@@ -177,6 +177,39 @@ public class VectorImportController : ControllerBase
     }
 
     /// <summary>
+    /// Re-vectorize các records đã có Content nhưng chưa có VectorJson
+    /// </summary>
+    [HttpPost("revectorize")]
+    public async Task<IActionResult> Revectorize([FromForm] string tableName)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(tableName))
+            {
+                return BadRequest(new { error = "Tên bảng không được để trống" });
+            }
+
+            _logger.LogInformation("Bắt đầu re-vectorize cho bảng: {TableName}", tableName);
+
+            var result = await _vectorImportService.RevectorizeMissingVectorsAsync(tableName);
+
+            return Ok(new
+            {
+                message = "Re-vectorize thành công",
+                tableName = tableName,
+                processedCount = result.ProcessedCount,
+                successCount = result.SuccessCount,
+                errorCount = result.ErrorCount
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Lỗi khi re-vectorize");
+            return StatusCode(500, new { error = "Lỗi khi re-vectorize", details = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Test endpoint để kiểm tra service hoạt động
     /// </summary>
     [HttpGet("health")]

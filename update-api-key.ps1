@@ -4,8 +4,14 @@
 Write-Host "🔐 CẬP NHẬT GEMINI API KEY VÀO FIREBASE SECRETS" -ForegroundColor Cyan
 Write-Host ""
 
-# API key mới
-$API_KEY = "AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A"
+# API key - yêu cầu nhập từ người dùng
+Write-Host "⚠️  QUAN TRỌNG: Không hardcode API key trong code!" -ForegroundColor Yellow
+Write-Host ""
+$API_KEY = Read-Host "Nhập Gemini API Key của bạn"
+if ([string]::IsNullOrWhiteSpace($API_KEY)) {
+    Write-Host "❌ API key không được để trống!" -ForegroundColor Red
+    exit 1
+}
 
 # Kiểm tra Firebase CLI đã cài chưa
 Write-Host "📋 Kiểm tra Firebase CLI..." -ForegroundColor Yellow

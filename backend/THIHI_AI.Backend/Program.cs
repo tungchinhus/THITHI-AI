@@ -37,7 +37,15 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+// Chỉ dùng HTTPS redirection khi có HTTPS endpoint được cấu hình
+// Khi chạy với profile "http" (chỉ port 5000), bỏ qua để tránh lỗi redirect
+var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? 
+           app.Configuration["Urls"] ?? 
+           app.Configuration["applicationUrl"] ?? "";
+if (urls.Contains("https://", StringComparison.OrdinalIgnoreCase))
+{
+    app.UseHttpsRedirection();
+}
 
 // Bật CORS
 app.UseCors("AllowAngularDevClient");

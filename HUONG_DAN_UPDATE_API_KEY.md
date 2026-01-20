@@ -59,13 +59,15 @@ firebase use YOUR_PROJECT_ID
 ### Bước 4: Set API key vào Firebase Secrets
 ```bash
 # Cách 1: Nhập trực tiếp (Windows PowerShell)
-echo "AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A" | firebase functions:secrets:set GEMINI_API_KEY
+# Thay YOUR_API_KEY bằng API key thực tế của bạn
+echo "YOUR_API_KEY" | firebase functions:secrets:set GEMINI_API_KEY
 # Nếu firebase command không hoạt động:
-# echo "AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A" | npx firebase-tools functions:secrets:set GEMINI_API_KEY
+# echo "YOUR_API_KEY" | npx firebase-tools functions:secrets:set GEMINI_API_KEY
 
 # Cách 2: Từ file (an toàn hơn)
 # Tạo file tạm (sẽ xóa sau)
-echo "AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A" > temp-api-key.txt
+# Thay YOUR_API_KEY bằng API key thực tế của bạn
+echo "YOUR_API_KEY" > temp-api-key.txt
 Get-Content temp-api-key.txt | firebase functions:secrets:set GEMINI_API_KEY
 # Xóa file tạm ngay sau khi set
 Remove-Item temp-api-key.txt
@@ -100,13 +102,13 @@ firebase deploy --only functions
 1. Nếu chưa có secret `GEMINI_API_KEY`:
    - Click **CREATE SECRET**
    - Name: `GEMINI_API_KEY`
-   - Secret value: `AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A`
+   - Secret value: `YOUR_API_KEY` (thay bằng API key thực tế của bạn)
    - Click **CREATE SECRET**
 
 2. Nếu đã có secret:
    - Click vào secret `GEMINI_API_KEY`
    - Click **ADD NEW VERSION**
-   - Paste API key mới: `AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A`
+   - Paste API key mới: `YOUR_API_KEY` (thay bằng API key thực tế của bạn)
    - Click **ADD VERSION**
 
 ### Bước 4: Cấp quyền cho Firebase Functions
@@ -123,7 +125,8 @@ firebase deploy --only functions
 ```bash
 # Tạo file .env trong thư mục functions/
 cd functions
-echo "GEMINI_API_KEY=AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A" > .env
+echo "GEMINI_API_KEY=YOUR_API_KEY" > .env
+# Thay YOUR_API_KEY bằng API key thực tế của bạn
 ```
 
 ### Bước 2: Load environment variable trong code
@@ -157,7 +160,7 @@ firebase functions:log --only chatFunction
 ### ❌ KHÔNG hardcode API key trong code:
 ```javascript
 // ❌ SAI - KHÔNG LÀM THẾ NÀY!
-const apiKey = 'AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A';
+const apiKey = 'YOUR_API_KEY'; // KHÔNG hardcode API key!
 ```
 
 ### ❌ KHÔNG commit file chứa API key:
@@ -191,7 +194,7 @@ const apiKey = 'AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A';
 
 ## 💡 LƯU Ý
 
-- API key của bạn: `AIzaSyB1Bzqz2KAbA2rOWTFzyrNRr05zxguxq3A`
+- API key phải được lưu trong Firebase Secrets, KHÔNG hardcode trong code
 - Function code đã sử dụng `process.env.GEMINI_API_KEY` từ Firebase Secrets
 - Không cần thay đổi code, chỉ cần set secret là đủ
 - Secret sẽ tự động được inject vào `process.env` khi function chạy

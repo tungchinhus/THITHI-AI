@@ -1036,4 +1036,153 @@ public class VectorImportService
 
         return updatedCount;
     }
+
+    /// <summary>
+    /// Re-vectorize các records đã có Content nhưng chưa có VectorJson hoặc Embedding
+    /// </summary>
+    public async Task<(int ProcessedCount, int SuccessCount, int ErrorCount)> RevectorizeMissingVectorsAsync(string tableName)
+    {
+        _logger.LogInformation("Bắt đầu re-vectorize cho bảng: {TableName}", tableName);
+
+        string safeTableName = new string(tableName.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+        
+        using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        // Lấy tất cả records có Content nhưng chưa có VectorJson hoặc Embedding
+        string selectSql = $@"
+            SELECT ID, Content 
+            FROM dbo.[{safeTableName}]
+            WHERE Content IS NOT NULL 
+              AND Content != ''
+              AND (VectorJson IS NULL OR Embedding IS NULL)
+            ORDER BY ID";
+
+        var recordsToProcess = new List<(int Id, string Content)>();
+        using (var cmd = new SqlCommand(selectSql, conn))
+        using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                var id = reader.GetInt32(0);
+                var content = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                if (!string.IsNullOrWhiteSpace(content))
+                {
+                    recordsToProcess.Add((id, content));
+                }
+            }
+        }
+
+        _logger.LogInformation("Tìm thấy {Count} records cần re-vectorize", recordsToProcess.Count);
+
+        if (recordsToProcess.Count == 0)
+        {
+            return (0, 0, 0);
+        }
+
+        // Chia thành batches để xử lý
+        const int batchSize = 50;
+        int successCount = 0;
+        int errorCount = 0;
+
+        for (int batchStart = 0; batchStart < recordsToProcess.Count; batchStart += batchSize)
+        {
+            var batch = recordsToProcess.Skip(batchStart).Take(batchSize).ToList();
+            _logger.LogInformation("Processing batch {BatchStart}-{BatchEnd} ({Count} records)", 
+                batchStart, batchStart + batch.Count - 1, batch.Count);
+
+            try
+            {
+                // Generate embeddings cho batch
+                var texts = batch.Select(r => r.Content).ToList();
+                var vectors = await GenerateEmbeddingsAsync(texts);
+
+                if (vectors.Count != texts.Count)
+                {
+                    _logger.LogWarning("Số lượng vectors ({VectorCount}) không khớp với số lượng texts ({TextCount})", 
+                        vectors.Count, texts.Count);
+                    // Pad với empty vectors nếu thiếu
+                    while (vectors.Count < texts.Count)
+                    {
+                        vectors.Add(new List<float>());
+                    }
+                }
+
+                // Update VectorJson và Embedding cho từng record
+                using var transaction = conn.BeginTransaction();
+                try
+                {
+                    for (int i = 0; i < batch.Count; i++)
+                    {
+                        var record = batch[i];
+                        var vector = i < vectors.Count ? vectors[i] : new List<float>();
+
+                        string? vectorJson = null;
+                        string? vectorString = null;
+
+                        if (vector != null && vector.Count > 0)
+                        {
+                            try
+                            {
+                                vectorJson = JsonSerializer.Serialize(vector);
+                                vectorString = string.Join(",", vector.Select(v => v.ToString("F6")));
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Lỗi khi serialize vector cho record ID {Id}", record.Id);
+                            }
+                        }
+
+                        // Update SQL
+                        string updateSql = $@"
+                            UPDATE dbo.[{safeTableName}]
+                            SET VectorJson = @VectorJson,
+                                Embedding = CASE WHEN @Embedding IS NOT NULL THEN CAST(@Embedding AS VECTOR(384)) ELSE NULL END
+                            WHERE ID = @Id";
+
+                        using var cmd = new SqlCommand(updateSql, conn, transaction);
+                        cmd.Parameters.AddWithValue("@Id", record.Id);
+                        cmd.Parameters.AddWithValue("@VectorJson", vectorJson ?? (object)DBNull.Value);
+
+                        if (!string.IsNullOrEmpty(vectorString))
+                        {
+                            cmd.Parameters.Add(new SqlParameter("@Embedding", SqlDbType.NVarChar)
+                            {
+                                Value = $"[{vectorString}]"
+                            });
+                        }
+                        else
+                        {
+                            cmd.Parameters.AddWithValue("@Embedding", DBNull.Value);
+                        }
+
+                        await cmd.ExecuteNonQueryAsync();
+                        successCount++;
+                    }
+
+                    transaction.Commit();
+                    _logger.LogInformation("Đã update thành công batch {BatchStart}-{BatchEnd}", 
+                        batchStart, batchStart + batch.Count - 1);
+                }
+                catch (Exception ex)
+                {
+                    transaction.Rollback();
+                    _logger.LogError(ex, "Lỗi khi update batch {BatchStart}-{BatchEnd}", 
+                        batchStart, batchStart + batch.Count - 1);
+                    errorCount += batch.Count;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Lỗi khi generate embeddings cho batch {BatchStart}-{BatchEnd}", 
+                    batchStart, batchStart + batch.Count - 1);
+                errorCount += batch.Count;
+            }
+        }
+
+        _logger.LogInformation("Hoàn thành re-vectorize: {ProcessedCount} records, {SuccessCount} thành công, {ErrorCount} lỗi", 
+            recordsToProcess.Count, successCount, errorCount);
+
+        return (recordsToProcess.Count, successCount, errorCount);
+    }
 }
