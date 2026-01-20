@@ -346,9 +346,11 @@ exports.chatFunction = onRequest(
       "GEMINI_API_KEY",
       "MICROSOFT_CLIENT_SECRET", // For future refresh token implementation
       // SQL Server secrets for chat memory
+      // Note: SQL_SERVER_USER and SQL_SERVER_PASSWORD are optional
+      // If not provided, Windows Authentication (Integrated Security) will be used
       "SQL_SERVER_HOST",
-      "SQL_SERVER_USER",
-      "SQL_SERVER_PASSWORD",
+      "SQL_SERVER_USER", // Optional - omit for Windows Authentication
+      "SQL_SERVER_PASSWORD", // Optional - omit for Windows Authentication
       "SQL_SERVER_DATABASE",
       "SQL_SERVER_PORT" // Optional
       // Note: MICROSOFT_TENANT_ID removed - not needed in backend, already in frontend environment.ts
@@ -373,9 +375,11 @@ exports.chatFunction = onRequest(
       let sqlPoolInitialized = false;
       // #region agent log
       fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:368',message:'Checking SQL Server config',data:{hasSqlConnection:!!sqlConnection,hasSqlHost:!!process.env.SQL_SERVER_HOST,hasSqlUser:!!process.env.SQL_SERVER_USER,hasSqlPassword:!!process.env.SQL_SERVER_PASSWORD,hasSqlDatabase:!!process.env.SQL_SERVER_DATABASE},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      const useWindowsAuth = !process.env.SQL_SERVER_USER && !process.env.SQL_SERVER_PASSWORD;
       console.log('🔍 DEBUG: SQL Server config check', {
         hasSqlConnection: !!sqlConnection,
         hasSqlHost: !!process.env.SQL_SERVER_HOST,
+        authentication: useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication',
         hasSqlUser: !!process.env.SQL_SERVER_USER,
         hasSqlPassword: !!process.env.SQL_SERVER_PASSWORD,
         hasSqlDatabase: !!process.env.SQL_SERVER_DATABASE
@@ -391,14 +395,24 @@ exports.chatFunction = onRequest(
             // #region agent log
             fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:373',message:'Initializing SQL pool',data:{server:process.env.SQL_SERVER_HOST,database:process.env.SQL_SERVER_DATABASE||'THITHI_AI',port:parseInt(process.env.SQL_SERVER_PORT||'1433')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
             // #endregion
-            await sqlConnection.initializeSQLPool({
+            // Build config object - omit user/password for Windows Authentication
+            const sqlConfig = {
               server: process.env.SQL_SERVER_HOST,
-              user: process.env.SQL_SERVER_USER,
-              password: process.env.SQL_SERVER_PASSWORD,
               database: process.env.SQL_SERVER_DATABASE || 'THITHI_AI',
               port: parseInt(process.env.SQL_SERVER_PORT || '1433'),
               encrypt: process.env.SQL_SERVER_ENCRYPT !== 'false'
-            });
+            };
+            
+            // Only add user/password if provided (for SQL Server Authentication)
+            // If omitted, Windows Authentication will be used
+            if (process.env.SQL_SERVER_USER) {
+              sqlConfig.user = process.env.SQL_SERVER_USER;
+            }
+            if (process.env.SQL_SERVER_PASSWORD) {
+              sqlConfig.password = process.env.SQL_SERVER_PASSWORD;
+            }
+            
+            await sqlConnection.initializeSQLPool(sqlConfig);
             sqlPoolInitialized = true;
             // #region agent log
             fetch('http://127.0.0.1:7243/ingest/5d4a1534-8047-4ce8-ad09-8cd456043831',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.js:380',message:'Pool initialized successfully',data:{sqlPoolInitialized},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
@@ -964,7 +978,30 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
   * Giá trị nhỏ nhất (min)
   * Giá trị lớn nhất (max)
   * Tổng (sum)
-  Khi user yêu cầu tính toán, hệ thống đã tự động thực hiện và cung cấp kết quả. Bạn PHẢI sử dụng kết quả đó để trả lời trực tiếp.
+  
+  **QUAN TRỌNG - CÁCH XỬ LÝ TÍNH TOÁN THỐNG KÊ:**
+  1. Khi user yêu cầu tính toán (ví dụ: "tính độ lệch chuẩn của TBKT 20113B"), hệ thống đã tự động:
+     - Phát hiện loại tính toán (độ lệch chuẩn, trung bình, etc.)
+     - Phát hiện điều kiện lọc (TBKT = 20113B, LSX = xxx, etc.)
+     - Tự động chọn field số phù hợp để tính toán (nếu user không chỉ định field cụ thể)
+     - Thực hiện tính toán và cung cấp kết quả trong CONTEXT
+  
+  2. Bạn PHẢI sử dụng kết quả tính toán trong CONTEXT để trả lời trực tiếp cho user
+  
+  3. Nếu kết quả tính toán có trong CONTEXT:
+     - Hiển thị kết quả một cách rõ ràng và dễ hiểu
+     - Giải thích ý nghĩa của kết quả (nếu cần)
+     - Nếu có filter (ví dụ: TBKT 20113B), nhắc lại điều kiện lọc trong câu trả lời
+  
+  4. Nếu kết quả tính toán báo lỗi hoặc không tìm thấy dữ liệu:
+     - Giải thích rõ ràng lý do (ví dụ: không tìm thấy dữ liệu với TBKT = 20113B)
+     - Đề xuất các giải pháp thay thế (kiểm tra lại mã TBKT, thử tìm kiếm khác, etc.)
+     - KHÔNG được nói rằng bạn không thể tính toán nếu hệ thống đã cung cấp kết quả tính toán
+  
+  5. Khi user hỏi "tính [loại] của [filter]" (ví dụ: "tính độ lệch chuẩn của TBKT 20113B"):
+     - Hệ thống sẽ tự động tính toán cho TẤT CẢ các field số trong các record thỏa mãn điều kiện filter
+     - Nếu không chỉ định field cụ thể, hệ thống sẽ tự động chọn field số quan trọng nhất (ưu tiên: kVA, Po, Io, Pk75, Uk75, A, G, H, I)
+     - Bạn cần hiển thị rõ field nào đã được tính toán
 
 - **PHÂN TÍCH VÀ ĐẾM DỮ LIỆU:** Hệ thống có thể đếm, nhóm và phân tích dữ liệu TSMay:
   * Đếm số lượng bản ghi: "có bao nhiêu", "how many", "tổng số"
@@ -2492,8 +2529,16 @@ function extractCalculationRequest(question) {
   // Extract field name (common TSMay fields)
   // Pattern 1: "của kVA trong TSMay" -> extract "kVA"
   // Pattern 2: "của Po (W)" -> extract "Po (W)"
+  // Pattern 3: "tính độ lệch chuẩn của kVA" -> extract "kVA"
+  // IMPORTANT: Exclude filter patterns (TBKT, LSX, SBB, Số máy) from field extraction
+  
+  // First, check if the question contains filter patterns to exclude them
+  const hasFilterPattern = /(?:tbkt|lsx|sbb|số\s*máy|so\s*may)\s*\d+/i.test(question);
+  
   const fieldPatterns = [
-    /(?:của|of|cho|for)\s+([a-záàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ\s()]+?)(?:\s+(?:trong|in|từ|from)|$)/i,
+    // Pattern: "của [field] trong/..." - but exclude if it's a filter pattern
+    /(?:của|of|cho|for)\s+([a-záàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ\s()]+?)(?:\s+(?:trong|in|từ|from|với|with)|$)/i,
+    // Pattern: "field [name]" or "trường [name]"
     /(?:field|trường|cột|column)\s+([a-záàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ\s()]+?)(?:\s+(?:trong|in|từ|from)|$)/i
   ];
   
@@ -2501,9 +2546,21 @@ function extractCalculationRequest(question) {
   for (const pattern of fieldPatterns) {
     const match = question.match(pattern);
     if (match && match[1]) {
-      fieldName = match[1].trim();
+      let extractedField = match[1].trim();
       // Remove "trong TSMay" if accidentally captured
-      fieldName = fieldName.replace(/\s+trong\s+tsmay.*$/i, '').trim();
+      extractedField = extractedField.replace(/\s+trong\s+tsmay.*$/i, '').trim();
+      
+      // Skip if it's a filter pattern (TBKT, LSX, SBB, Số máy with numbers)
+      if (hasFilterPattern && /(?:tbkt|lsx|sbb|số\s*máy|so\s*may)\s*\d+/i.test(extractedField)) {
+        continue;
+      }
+      
+      // Skip if it looks like a filter value (e.g., "20113B", "2081001453")
+      if (/^\d{4,}[a-z]?$/i.test(extractedField)) {
+        continue;
+      }
+      
+      fieldName = extractedField;
       break;
     }
   }
@@ -2528,9 +2585,57 @@ function extractCalculationRequest(question) {
     }
   }
   
+  // Extract filter conditions (e.g., "TBKT 20113B", "của TBKT 20113B")
+  let filterField = null;
+  let filterValue = null;
+  
+  // Pattern 1: "TBKT 20113B", "TBKT20113B", "mã TBKT 20113B"
+  const tbktPattern = /(?:mã\s+)?tbkt\s*(\d{4,6}[a-z]?)/i;
+  const tbktMatch = question.match(tbktPattern);
+  if (tbktMatch) {
+    filterField = 'TBKT';
+    filterValue = tbktMatch[1].toUpperCase();
+  }
+  
+  // Pattern 2: "LSX 2081001453", "LSX2081001453"
+  const lsxPattern = /(?:mã\s+)?lsx\s*(\d{6,})/i;
+  const lsxMatch = question.match(lsxPattern);
+  if (lsxMatch) {
+    filterField = 'LSX';
+    filterValue = lsxMatch[1];
+  }
+  
+  // Pattern 3: "SBB 2130478", "SBB2130478"
+  const sbbPattern = /(?:mã\s+)?sbb\s*(\d{6,})/i;
+  const sbbMatch = question.match(sbbPattern);
+  if (sbbMatch) {
+    filterField = 'SBB';
+    filterValue = sbbMatch[1];
+  }
+  
+  // Pattern 4: "Số máy 212250026", "Số máy212250026"
+  const soMayPattern = /(?:số\s*máy|so\s*may)\s*(\d{6,})/i;
+  const soMayMatch = question.match(soMayPattern);
+  if (soMayMatch) {
+    filterField = 'Số máy';
+    filterValue = soMayMatch[1];
+  }
+  
+  // Pattern 5: "KVA 250", "KVA250" (if not already extracted as fieldName)
+  if (!filterField && !fieldName) {
+    const kvaPattern = /(?:kva|kva\s*=|kva\s*là)\s*(\d+)/i;
+    const kvaMatch = question.match(kvaPattern);
+    if (kvaMatch) {
+      filterField = 'KVA';
+      filterValue = kvaMatch[1];
+    }
+  }
+  
   return {
     type: calculationType,
-    field: fieldName
+    field: fieldName,
+    filterField: filterField,
+    filterValue: filterValue
   };
 }
 
@@ -2551,9 +2656,68 @@ async function calculateTSMayStatistics(question) {
       throw new Error('Không thể xác định loại tính toán từ câu hỏi.');
     }
     
+    console.log('📊 Calculation request:', {
+      type: calcRequest.type,
+      field: calcRequest.field,
+      filterField: calcRequest.filterField,
+      filterValue: calcRequest.filterValue
+    });
+    
+    // Try SQL Server first if configured
+    if (sqlTSMayService && process.env.SQL_SERVER_HOST) {
+      try {
+        console.log('📊 Using SQL Server for statistics calculation...');
+        const sqlResult = await sqlTSMayService.calculateStatistics(
+          calcRequest.type,
+          calcRequest.field,
+          {
+            filterField: calcRequest.filterField,
+            filterValue: calcRequest.filterValue
+          }
+        );
+        
+        if (sqlResult && sqlResult.result !== null && sqlResult.result !== undefined) {
+          return sqlResult.formattedResult;
+        }
+      } catch (sqlError) {
+        console.warn('⚠️ SQL Server calculation failed, falling back to Firestore:', sqlError.message);
+        // Fall through to Firestore calculation
+      }
+    }
+    
+    // Fallback to Firestore calculation
     // Get all TSMay data
     const tsMayRef = db.collection('TSMay');
-    const snapshot = await tsMayRef.limit(1000).get(); // Get up to 1000 records
+    let query = tsMayRef;
+    
+    // Apply filter if specified
+    if (calcRequest.filterField && calcRequest.filterValue) {
+      // Try to find the field in documents first to determine the exact field name
+      const sampleSnapshot = await tsMayRef.limit(1).get();
+      if (!sampleSnapshot.empty) {
+        const sampleDoc = sampleSnapshot.docs[0].data();
+        const columnMapping = sampleDoc._columnMapping || {};
+        const reverseMapping = {};
+        Object.keys(columnMapping).forEach(originalName => {
+          const sanitized = columnMapping[originalName];
+          reverseMapping[sanitized] = originalName;
+        });
+        
+        // Find the field key
+        const fieldKey = Object.keys(sampleDoc).find(key => {
+          if (key.startsWith('_')) return false;
+          const originalName = reverseMapping[key] || key;
+          return originalName.toLowerCase().includes(calcRequest.filterField.toLowerCase()) ||
+                 calcRequest.filterField.toLowerCase().includes(originalName.toLowerCase());
+        });
+        
+        if (fieldKey) {
+          query = query.where(fieldKey, '==', calcRequest.filterValue);
+        }
+      }
+    }
+    
+    const snapshot = await query.limit(1000).get(); // Get up to 1000 records
     
     if (snapshot.empty) {
       return 'Không tìm thấy dữ liệu nào trong collection TSMay để tính toán.';
@@ -2745,11 +2909,27 @@ ${calcRequest.type === 'median' ? `
     // #region agent log
     console.error('❌ Error calculating TSMay statistics:', {
       error: error.message,
-      errorStack: error.stack?.substring(0, 200)
+      errorStack: error.stack?.substring(0, 500),
+      question: question.substring(0, 100)
     });
     // #endregion
     
-    throw error;
+    // Return a user-friendly error message instead of throwing
+    const errorMessage = error.message || 'Lỗi không xác định';
+    return `**LỖI KHI TÍNH TOÁN THỐNG KÊ:**
+
+Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nhưng gặp lỗi: ${errorMessage}
+
+**Các nguyên nhân có thể:**
+- Dữ liệu TSMay chưa được import hoặc collection trống
+- Field được yêu cầu không tồn tại trong dữ liệu
+- Giá trị filter không đúng (ví dụ: TBKT không tồn tại)
+- Dữ liệu không đủ để tính toán (cần ít nhất 1 giá trị số hợp lệ)
+
+**Giải pháp:**
+- Kiểm tra lại dữ liệu TSMay đã được import chưa
+- Kiểm tra lại tên field và giá trị filter
+- Thử lại với câu hỏi khác hoặc liên hệ bộ phận kỹ thuật để hỗ trợ`;
   }
 }
 
@@ -4414,6 +4594,386 @@ exports.telegramLogin = onRequest(
         });
       } catch (error) {
         console.error("Error in telegramLogin:", error);
+        return res.status(500).json({
+          error: "Internal Server Error",
+          message: error.message || "An unexpected error occurred",
+        });
+      }
+    });
+  }
+);
+
+// ============================================
+// RAG System Endpoints
+// ============================================
+
+// Load RAG service
+let ragService = null;
+try {
+  ragService = require('./rag-service');
+  console.log('✅ RAG service loaded');
+} catch (error) {
+  console.warn('⚠️ RAG service not available:', error.message);
+}
+
+/**
+ * RAG Ingest Endpoint - Ingest PDF files into SQL Server with vector embeddings
+ * POST /ragIngest
+ * Body: { file: base64 encoded PDF, fileName: string }
+ */
+exports.ragIngest = onRequest(
+  {
+    cors: true,
+    maxInstances: 5,
+    secrets: [
+      "GEMINI_API_KEY",
+      "SQL_SERVER_HOST",
+      "SQL_SERVER_USER",
+      "SQL_SERVER_PASSWORD",
+      "SQL_SERVER_DATABASE",
+      "SQL_SERVER_PORT"
+    ],
+  },
+  async (req, res) => {
+    cors(req, res, async () => {
+      try {
+        if (req.method !== "POST") {
+          return res.status(405).json({
+            error: "Method Not Allowed",
+            message: "Only POST method is allowed",
+          });
+        }
+
+        if (!ragService) {
+          return res.status(503).json({
+            error: "Service Unavailable",
+            message: "RAG service is not available. Please check server logs.",
+          });
+        }
+
+        // Check SQL Server connection
+        if (!sqlConnection || !process.env.SQL_SERVER_HOST) {
+          return res.status(503).json({
+            error: "Service Unavailable",
+            message: "SQL Server is not configured. Please set SQL_SERVER_HOST secret.",
+          });
+        }
+
+        const geminiApiKey = process.env.GEMINI_API_KEY;
+        if (!geminiApiKey) {
+          return res.status(500).json({
+            error: "Configuration Error",
+            message: "GEMINI_API_KEY is not configured. Please set it in Firebase Secrets.",
+          });
+        }
+
+        // Get PDF file from request
+        const {file, fileName} = req.body;
+        
+        if (!file) {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "PDF file is required. Send file as base64 encoded string in 'file' field.",
+          });
+        }
+
+        if (!fileName) {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "File name is required in 'fileName' field.",
+          });
+        }
+
+        // Decode base64 PDF
+        let pdfBuffer;
+        try {
+          pdfBuffer = Buffer.from(file, 'base64');
+        } catch (error) {
+          return res.status(400).json({
+            error: "Invalid File Format",
+            message: "File must be base64 encoded. Error: " + error.message,
+          });
+        }
+
+        // Ensure SQL pool is initialized
+        const pool = sqlConnection.getSQLPool();
+        if (!pool) {
+          // Try to initialize
+          const sqlConfig = {
+            server: process.env.SQL_SERVER_HOST,
+            database: process.env.SQL_SERVER_DATABASE || 'THITHI_AI',
+            port: parseInt(process.env.SQL_SERVER_PORT || '1433'),
+            encrypt: process.env.SQL_SERVER_ENCRYPT !== 'false',
+            trustServerCertificate: true,
+          };
+
+          if (process.env.SQL_SERVER_USER) {
+            sqlConfig.user = process.env.SQL_SERVER_USER;
+          }
+          if (process.env.SQL_SERVER_PASSWORD) {
+            sqlConfig.password = process.env.SQL_SERVER_PASSWORD;
+          }
+
+          await sqlConnection.initializeSQLPool(sqlConfig);
+        }
+
+        // Ingest PDF
+        console.log(`📥 Ingesting PDF: ${fileName}`);
+        const result = await ragService.ingestPDF(
+          pdfBuffer,
+          fileName,
+          geminiApiKey,
+          'rag_documents' // table name
+        );
+
+        return res.status(200).json({
+          status: "success",
+          message: `Đã ingest thành công ${result.totalChunks} chunks từ ${result.totalPages} trang`,
+          data: result,
+        });
+      } catch (error) {
+        console.error("Error in ragIngest:", error);
+        return res.status(500).json({
+          error: "Internal Server Error",
+          message: error.message || "An unexpected error occurred",
+        });
+      }
+    });
+  }
+);
+
+/**
+ * RAG Chat Endpoint - Chat with RAG system using semantic search
+ * POST /ragChat
+ * Body: { query: string, topK?: number }
+ */
+exports.ragChat = onRequest(
+  {
+    cors: true,
+    maxInstances: 10,
+    secrets: [
+      "GEMINI_API_KEY",
+      "SQL_SERVER_HOST",
+      "SQL_SERVER_USER",
+      "SQL_SERVER_PASSWORD",
+      "SQL_SERVER_DATABASE",
+      "SQL_SERVER_PORT"
+    ],
+  },
+  async (req, res) => {
+    cors(req, res, async () => {
+      try {
+        if (req.method !== "POST") {
+          return res.status(405).json({
+            error: "Method Not Allowed",
+            message: "Only POST method is allowed",
+          });
+        }
+
+        if (!ragService) {
+          return res.status(503).json({
+            error: "Service Unavailable",
+            message: "RAG service is not available. Please check server logs.",
+          });
+        }
+
+        // Check SQL Server connection
+        if (!sqlConnection || !process.env.SQL_SERVER_HOST) {
+          return res.status(503).json({
+            error: "Service Unavailable",
+            message: "SQL Server is not configured. Please set SQL_SERVER_HOST secret.",
+          });
+        }
+
+        const geminiApiKey = process.env.GEMINI_API_KEY;
+        if (!geminiApiKey) {
+          return res.status(500).json({
+            error: "Configuration Error",
+            message: "GEMINI_API_KEY is not configured. Please set it in Firebase Secrets.",
+          });
+        }
+
+        const {query, topK = 4} = req.body;
+
+        if (!query || typeof query !== 'string' || query.trim().length === 0) {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "Query is required and must be a non-empty string.",
+          });
+        }
+
+        // Ensure SQL pool is initialized
+        const pool = sqlConnection.getSQLPool();
+        if (!pool) {
+          // Try to initialize
+          const sqlConfig = {
+            server: process.env.SQL_SERVER_HOST,
+            database: process.env.SQL_SERVER_DATABASE || 'THITHI_AI',
+            port: parseInt(process.env.SQL_SERVER_PORT || '1433'),
+            encrypt: process.env.SQL_SERVER_ENCRYPT !== 'false',
+            trustServerCertificate: true,
+          };
+
+          if (process.env.SQL_SERVER_USER) {
+            sqlConfig.user = process.env.SQL_SERVER_USER;
+          }
+          if (process.env.SQL_SERVER_PASSWORD) {
+            sqlConfig.password = process.env.SQL_SERVER_PASSWORD;
+          }
+
+          await sqlConnection.initializeSQLPool(sqlConfig);
+        }
+
+        // Search similar chunks
+        console.log(`🔍 Searching for: ${query}`);
+        const contexts = await ragService.searchSimilar(
+          query,
+          geminiApiKey,
+          'rag_documents',
+          topK
+        );
+
+        if (contexts.length === 0) {
+          return res.status(200).json({
+            answer: "Tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn trong tài liệu.",
+            sources: [],
+            query: query,
+          });
+        }
+
+        // Generate answer
+        console.log(`💬 Generating answer with ${contexts.length} contexts`);
+        const answer = await ragService.generateAnswer(query, contexts, geminiApiKey);
+
+        // Format sources
+        const sources = contexts.map(ctx => ({
+          file_name: ctx.fileName,
+          page_number: ctx.pageNumber,
+          content_preview: ctx.content.substring(0, 200) + (ctx.content.length > 200 ? '...' : ''),
+          similarity: ctx.similarity,
+        }));
+
+        return res.status(200).json({
+          answer: answer,
+          sources: sources,
+          query: query,
+        });
+      } catch (error) {
+        console.error("Error in ragChat:", error);
+        return res.status(500).json({
+          error: "Internal Server Error",
+          message: error.message || "An unexpected error occurred",
+        });
+      }
+    });
+  }
+);
+
+/**
+ * RAG Ingest Folder Endpoint - Ingest tất cả files trong folder vào SQL Server
+ * POST /ragIngestFolder
+ * Body: { folderPath: string }
+ */
+exports.ragIngestFolder = onRequest(
+  {
+    cors: true,
+    maxInstances: 2, // Folder ingest có thể tốn thời gian
+    secrets: [
+      "GEMINI_API_KEY",
+      "SQL_SERVER_HOST",
+      "SQL_SERVER_USER",
+      "SQL_SERVER_PASSWORD",
+      "SQL_SERVER_DATABASE",
+      "SQL_SERVER_PORT"
+    ],
+  },
+  async (req, res) => {
+    cors(req, res, async () => {
+      try {
+        if (req.method !== "POST") {
+          return res.status(405).json({
+            error: "Method Not Allowed",
+            message: "Only POST method is allowed",
+          });
+        }
+
+        if (!ragService) {
+          return res.status(503).json({
+            error: "Service Unavailable",
+            message: "RAG service is not available. Please check server logs.",
+          });
+        }
+
+        // Check SQL Server connection
+        if (!sqlConnection || !process.env.SQL_SERVER_HOST) {
+          return res.status(503).json({
+            error: "Service Unavailable",
+            message: "SQL Server is not configured. Please set SQL_SERVER_HOST secret.",
+          });
+        }
+
+        const geminiApiKey = process.env.GEMINI_API_KEY;
+        if (!geminiApiKey) {
+          return res.status(500).json({
+            error: "Configuration Error",
+            message: "GEMINI_API_KEY is not configured. Please set it in Firebase Secrets.",
+          });
+        }
+
+        const {folderPath} = req.body;
+        
+        if (!folderPath || typeof folderPath !== 'string') {
+          return res.status(400).json({
+            error: "Bad Request",
+            message: "folderPath is required and must be a string. Example: 'C:\\MyData\\P-TK\\TBKT-25140T-250kVA'",
+          });
+        }
+
+        // Validate folder path exists
+        const fs = require('fs');
+        if (!fs.existsSync(folderPath)) {
+          return res.status(404).json({
+            error: "Folder Not Found",
+            message: `Folder not found: ${folderPath}`,
+          });
+        }
+
+        // Ensure SQL pool is initialized
+        const pool = sqlConnection.getSQLPool();
+        if (!pool) {
+          const sqlConfig = {
+            server: process.env.SQL_SERVER_HOST,
+            database: process.env.SQL_SERVER_DATABASE || 'THITHI_AI',
+            port: parseInt(process.env.SQL_SERVER_PORT || '1433'),
+            encrypt: process.env.SQL_SERVER_ENCRYPT !== 'false',
+            trustServerCertificate: true,
+          };
+
+          if (process.env.SQL_SERVER_USER) {
+            sqlConfig.user = process.env.SQL_SERVER_USER;
+          }
+          if (process.env.SQL_SERVER_PASSWORD) {
+            sqlConfig.password = process.env.SQL_SERVER_PASSWORD;
+          }
+
+          await sqlConnection.initializeSQLPool(sqlConfig);
+        }
+
+        // Ingest folder
+        console.log(`📁 Ingesting folder: ${folderPath}`);
+        const result = await ragService.ingestFolder(
+          folderPath,
+          geminiApiKey,
+          'rag_documents'
+        );
+
+        return res.status(200).json({
+          status: "success",
+          message: `Đã ingest thành công ${result.totalChunks} chunks từ ${result.totalFiles} files`,
+          data: result,
+        });
+      } catch (error) {
+        console.error("Error in ragIngestFolder:", error);
         return res.status(500).json({
           error: "Internal Server Error",
           message: error.message || "An unexpected error occurred",

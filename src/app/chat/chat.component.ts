@@ -1090,15 +1090,24 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
     // Get user info for personalization
     const userInfo = this.getUserInfo();
     
+    // Check if this is a follow-up question and infer context from previous messages
+    const inferredMessage = this.inferContextFromHistory(message, chatHistory);
+    const finalMessage = inferredMessage || message;
+    
     // Check if this is a data query and perform vector search
-    const isDataQuery = this.isDataQuery(message);
-    let enhancedMessage = message;
+    const isDataQuery = this.isDataQuery(finalMessage);
+    let enhancedMessage = finalMessage;
     let vectorSearchResults: SearchResult[] = [];
     
     if (isDataQuery) {
       console.log('🔍 Detected data query, performing vector search...');
       // Perform vector search first
-      this.vectorSearchService.search(message, 'TSMay', 5, 0.3).subscribe({
+      // For count queries, use higher topN to get all matches
+      const isCountQuery = finalMessage.toLowerCase().includes('có bao nhiêu') || 
+                          finalMessage.toLowerCase().includes('how many') ||
+                          finalMessage.toLowerCase().includes('count');
+      const topN = isCountQuery ? 1000 : 5;
+      this.vectorSearchService.search(finalMessage, 'TSMay', topN, 0.3).subscribe({
         next: (searchResponse) => {
           if (searchResponse.results && searchResponse.results.length > 0) {
             vectorSearchResults = searchResponse.results;
@@ -1106,27 +1115,34 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
             
             // Enhance message with search results for AI context
             const searchContext = this.formatSearchResultsForAI(searchResponse.results);
-            enhancedMessage = `${message}\n\n[Dữ liệu tìm được từ hệ thống:\n${searchContext}]`;
             
-            // Continue with enhanced message
+            // For count queries, add explicit instruction to count ALL results
+            let instruction = '';
+            if (isCountQuery) {
+              instruction = `\n\n[QUAN TRỌNG: Câu hỏi này yêu cầu đếm số lượng. Hệ thống đã tìm thấy ${searchResponse.results.length} kết quả. Bạn PHẢI đếm TẤT CẢ ${searchResponse.results.length} kết quả này, không chỉ 5 kết quả đầu tiên. Hãy liệt kê và đếm TẤT CẢ các kết quả phù hợp.]\n\n`;
+            }
+            
+            enhancedMessage = `${finalMessage}${instruction}[Dữ liệu tìm được từ hệ thống (TỔNG CỘNG ${searchResponse.results.length} kết quả):\n${searchContext}]`;
+            
+            // Continue with enhanced message (use finalMessage which may have inferred context)
             this.sendMessageWithContext(enhancedMessage, validToken, chatHistory, userInfo, vectorSearchResults);
           } else {
             console.log('⚠️ No results from vector search, proceeding with original message');
-            // No results, proceed with original message
-            this.sendMessageWithContext(message, validToken, chatHistory, userInfo, []);
+            // No results, proceed with original message (use finalMessage for context, but original for display)
+            this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, []);
           }
         },
         error: (error) => {
           console.error('Error in vector search:', error);
           // If search fails, proceed with original message
-          this.sendMessageWithContext(message, validToken, chatHistory, userInfo, []);
+          this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, []);
         }
       });
       return; // Exit early, sendMessageWithContext will handle the rest
     }
     
-    // Not a data query, proceed normally
-    this.sendMessageWithContext(message, validToken, chatHistory, userInfo, []);
+    // Not a data query, proceed normally (use finalMessage which may have inferred context)
+    this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, []);
   }
 
   /**
@@ -1220,6 +1236,111 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         }, 100);
       }
     });
+  }
+
+  /**
+   * Infer context from chat history for follow-up questions
+   * Example: "tbkt 20002B có bao nhiêu máy" -> "18144A thì sao?" -> "tbkt 18144A có bao nhiêu máy"
+   */
+  private inferContextFromHistory(currentMessage: string, chatHistory: any[]): string | null {
+    const lowerMessage = currentMessage.toLowerCase().trim();
+    
+    // Check if this is a follow-up question pattern
+    const followUpPatterns = [
+      /^(.*?)\s+thì\s+sao\??$/i,  // "18144A thì sao?"
+      /^còn\s+(.*?)\??$/i,         // "còn 18144A?"
+      /^(.*?)\s+nữa\??$/i,         // "18144A nữa?"
+      /^(.*?)\s+thì\s+.*$/i,       // "18144A thì ..."
+      /^và\s+(.*?)\??$/i,          // "và 18144A?"
+    ];
+    
+    let extractedValue: string | null = null;
+    for (const pattern of followUpPatterns) {
+      const match = currentMessage.match(pattern);
+      if (match && match[1]) {
+        extractedValue = match[1].trim();
+        break;
+      }
+    }
+    
+    // Special handling for date follow-up: "ngày 01/02/2023 thì sao?" -> extract "01/02/2023"
+    if (extractedValue && extractedValue.toLowerCase().startsWith('ngày')) {
+      const dateMatch = extractedValue.match(/(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})/i);
+      if (dateMatch) {
+        extractedValue = dateMatch[1];
+      }
+    }
+    
+    // If no pattern matched, check if message is just a code (like "18144A") or date (like "01/02/2023")
+    if (!extractedValue) {
+      const trimmed = currentMessage.trim();
+      if (/^[a-z0-9]{4,10}$/i.test(trimmed)) {
+        extractedValue = trimmed;
+      } else if (/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/.test(trimmed)) {
+        const dateMatch = trimmed.match(/(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})/);
+        if (dateMatch) {
+          extractedValue = dateMatch[1];
+        }
+      }
+    }
+
+    if (!extractedValue) {
+      return null; // Not a follow-up question
+    }
+
+    // Look for previous data query in chat history (last 20 messages to find original query)
+    // We need to search more messages because there might be multiple follow-up questions
+    const recentHistory = chatHistory.slice(-20).reverse();
+    
+    for (const msg of recentHistory) {
+      if (msg.role === 'user') {
+        const prevMessage = msg.content.toLowerCase();
+        
+        // Extract context patterns from previous message
+        // Pattern 1: "tbkt XXXX có bao nhiêu máy" -> extract "tbkt" and "có bao nhiêu máy"
+        const tbktPattern = /tbkt\s+([a-z0-9]+)\s+(có\s+bao\s+nhiêu|how\s+many|count)/i;
+        const tbktMatch = prevMessage.match(tbktPattern);
+        if (tbktMatch) {
+          const inferredQuery = `tbkt ${extractedValue} có bao nhiêu máy`;
+          return inferredQuery;
+        }
+        
+        // Pattern 2: "lsx XXXX có bao nhiêu" -> extract "lsx" and "có bao nhiêu"
+        const lsxPattern = /lsx\s+([a-z0-9]+)\s+(có\s+bao\s+nhiêu|how\s+many|count)/i;
+        const lsxMatch = prevMessage.match(lsxPattern);
+        if (lsxMatch) {
+          const inferredQuery = `lsx ${extractedValue} có bao nhiêu máy`;
+          return inferredQuery;
+        }
+        
+        // Pattern 3: Date pattern "ngày sản xuất XXXX có bao nhiêu máy" -> "ngày YYYY thì sao?" -> "ngày sản xuất YYYY có bao nhiêu máy"
+        // Also match "ngày XXXX có bao nhiêu máy" (without "sản xuất")
+        const datePattern = /ngày\s+(sản\s+xuất\s+)?(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\s+(có\s+bao\s+nhiêu|how\s+many|count)/i;
+        const dateMatch = prevMessage.match(datePattern);
+        
+        if (dateMatch) {
+          // Check if extractedValue is a date
+          const extractedDatePattern = /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/;
+          if (extractedDatePattern.test(extractedValue)) {
+            const inferredQuery = `ngày sản xuất ${extractedValue} có bao nhiêu máy`;
+            return inferredQuery;
+          }
+        }
+        
+        // Pattern 4: Generic "có bao nhiêu máy" -> reuse pattern
+        if (prevMessage.includes('có bao nhiêu') || prevMessage.includes('how many')) {
+          // Try to extract field name (tbkt, lsx, etc.) from previous message
+          const fieldMatch = prevMessage.match(/(tbkt|lsx|sbb|số\s+máy|so\s+may)\s+[a-z0-9]+/i);
+          if (fieldMatch) {
+            const field = fieldMatch[1].toLowerCase();
+            const inferredQuery = `${field} ${extractedValue} có bao nhiêu máy`;
+            return inferredQuery;
+          }
+        }
+      }
+    }
+
+    return null; // No context found
   }
 
   /**

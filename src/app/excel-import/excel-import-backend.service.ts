@@ -23,12 +23,16 @@ export class ExcelImportBackendService {
    * @param file Excel file
    * @param tableName Table name in SQL Server
    * @param selectedColumns Array of selected column names
+   * @param columnsForCalculation Array of column names for calculation (normalize)
+   * @param columnsForVectorization Array of column names for vectorization
    * @returns Observable with import response
    */
   importExcelToBackend(
     file: File,
     tableName: string,
-    selectedColumns: string[]
+    selectedColumns: string[],
+    columnsForCalculation: string[] = [],
+    columnsForVectorization: string[] = []
   ): Observable<ImportResponse> {
     const formData = new FormData();
     formData.append('file', file);
@@ -37,6 +41,16 @@ export class ExcelImportBackendService {
     // Append each selected column
     selectedColumns.forEach(column => {
       formData.append('selectedColumns', column);
+    });
+
+    // Append columns for calculation
+    columnsForCalculation.forEach(column => {
+      formData.append('columnsForCalculation', column);
+    });
+
+    // Append columns for vectorization
+    columnsForVectorization.forEach(column => {
+      formData.append('columnsForVectorization', column);
     });
 
     return this.http.post<ImportResponse>(

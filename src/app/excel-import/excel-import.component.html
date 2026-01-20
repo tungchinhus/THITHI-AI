@@ -8,7 +8,6 @@
       <a routerLink="/" class="text-white hover:underline" style="color: #ffffff; text-decoration: none;">
         ← Quay lại Chat
       </a>
-      <span style="color: #ffffff; font-size: 1rem; font-weight: 600;">Import Excel</span>
     </div>
   </header>
 
@@ -164,27 +163,69 @@
         Đã chọn: <strong>{{ getSelectedColumnsCount() }}</strong> / {{ columns.length }} cột
       </p>
 
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem;">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem;">
         <ng-container *ngFor="let column of columns; trackBy: trackByColumnIndex">
-          <label
+          <div
             *ngIf="column"
-            class="flex items-center p-3 border rounded-md cursor-pointer hover:bg-gray-50"
+            class="p-3 border rounded-md"
             [class.bg-indigo-50]="column?.selected"
             [class.border-indigo-500]="column?.selected"
-            style="display: flex; align-items: center; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 0.375rem; cursor: pointer;"
+            style="padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 0.375rem;"
             [style.background-color]="column?.selected ? '#eef2ff' : '#ffffff'"
             [style.border-color]="column?.selected ? '#6366f1' : '#d1d5db'"
           >
-            <input
-              type="checkbox"
-              [checked]="column?.selected"
-              (change)="toggleColumn(column)"
-              class="mr-2"
-              style="margin-right: 0.5rem;"
-            />
-            <span class="text-sm" style="font-size: 0.875rem; color: #1f2937;">{{ column?.name || 'Cột không tên' }}</span>
-          </label>
+            <!-- Column Name and Select Checkbox -->
+            <label class="flex items-center mb-2 cursor-pointer" style="display: flex; align-items: center; margin-bottom: 0.5rem; cursor: pointer;">
+              <input
+                type="checkbox"
+                [checked]="column?.selected"
+                (change)="toggleColumn(column)"
+                class="mr-2"
+                style="margin-right: 0.5rem;"
+              />
+              <span class="text-sm font-medium" style="font-size: 0.875rem; font-weight: 500; color: #1f2937;">{{ column?.name || 'Cột không tên' }}</span>
+            </label>
+            
+            <!-- Options for selected columns -->
+            <div *ngIf="column?.selected" class="ml-6 space-y-2" style="margin-left: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+              <label class="flex items-center cursor-pointer" style="display: flex; align-items: center; cursor: pointer;">
+                <input
+                  type="checkbox"
+                  [checked]="column?.isForCalculation"
+                  (change)="column.isForCalculation = !column.isForCalculation"
+                  class="mr-2"
+                  style="margin-right: 0.5rem;"
+                />
+                <span class="text-xs text-blue-600" style="font-size: 0.75rem; color: #2563eb;">
+                  🔢 Chuẩn hóa cho tính toán (SUM, AVG, etc.)
+                </span>
+              </label>
+              <label class="flex items-center cursor-pointer" style="display: flex; align-items: center; cursor: pointer;">
+                <input
+                  type="checkbox"
+                  [checked]="column?.isForVectorization"
+                  (change)="column.isForVectorization = !column.isForVectorization"
+                  class="mr-2"
+                  style="margin-right: 0.5rem;"
+                />
+                <span class="text-xs text-purple-600" style="font-size: 0.75rem; color: #9333ea;">
+                  🧠 Vectorize (tạo embedding)
+                </span>
+              </label>
+            </div>
+          </div>
         </ng-container>
+      </div>
+      
+      <!-- Summary Info -->
+      <div class="mt-4 p-3 bg-blue-50 rounded-md" style="margin-top: 1rem; padding: 0.75rem; background-color: #eff6ff; border-radius: 0.375rem;">
+        <p class="text-sm text-blue-800" style="font-size: 0.875rem; color: #1e40af; margin: 0 0 0.25rem 0;">
+          <strong>📊 Tóm tắt:</strong>
+        </p>
+        <ul class="text-xs text-blue-700 ml-4" style="font-size: 0.75rem; color: #1d4ed8; margin-left: 1rem; margin-top: 0.25rem;">
+          <li>🔢 Cột chuẩn hóa: <strong>{{ getColumnsForCalculation().length }}</strong> cột</li>
+          <li>🧠 Cột vectorize: <strong>{{ getColumnsForVectorization().length }}</strong> cột</li>
+        </ul>
       </div>
     </div>
 

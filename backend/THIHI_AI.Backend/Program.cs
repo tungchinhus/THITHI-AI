@@ -13,6 +13,7 @@ builder.Services.AddHttpClient<VectorSearchService>();
 // Đăng ký Services
 builder.Services.AddScoped<VectorImportService>();
 builder.Services.AddScoped<VectorSearchService>();
+builder.Services.AddScoped<PdfProcessingService>();
 
 // Cấu hình CORS cho frontend Angular (http://localhost:4200)
 builder.Services.AddCors(options =>

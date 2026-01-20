@@ -22,13 +22,17 @@ public class VectorImportController : ControllerBase
     /// <param name="file">Excel file (.xlsx, .xls)</param>
     /// <param name="tableName">Tên bảng SQL để lưu dữ liệu</param>
     /// <param name="selectedColumns">Danh sách các cột cần xử lý (từ header Excel)</param>
+    /// <param name="columnsForCalculation">Danh sách các cột cần chuẩn hóa cho tính toán (SUM, AVG, etc.)</param>
+    /// <param name="columnsForVectorization">Danh sách các cột cần vectorize (tạo embedding)</param>
     /// <returns></returns>
     [HttpPost("import")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> ImportExcel(
         [FromForm] IFormFile file,
         [FromForm] string tableName,
-        [FromForm] List<string> selectedColumns)
+        [FromForm] List<string> selectedColumns,
+        [FromForm] List<string>? columnsForCalculation = null,
+        [FromForm] List<string>? columnsForVectorization = null)
     {
         try
         {
@@ -57,10 +61,25 @@ public class VectorImportController : ControllerBase
 
             _logger.LogInformation("Nhận file: {FileName}, Size: {Size} bytes, Table: {TableName}, Columns: {Columns}", 
                 file.FileName, file.Length, tableName, string.Join(", ", selectedColumns));
+            
+            if (columnsForCalculation != null && columnsForCalculation.Any())
+            {
+                _logger.LogInformation("Cột chuẩn hóa cho tính toán: {Columns}", string.Join(", ", columnsForCalculation));
+            }
+            
+            if (columnsForVectorization != null && columnsForVectorization.Any())
+            {
+                _logger.LogInformation("Cột vectorize: {Columns}", string.Join(", ", columnsForVectorization));
+            }
 
             // Xử lý file
             using var stream = file.OpenReadStream();
-            await _vectorImportService.ProcessExcelImportAsync(stream, tableName, selectedColumns);
+            await _vectorImportService.ProcessExcelImportAsync(
+                stream, 
+                tableName, 
+                selectedColumns,
+                columnsForCalculation ?? new List<string>(),
+                columnsForVectorization ?? new List<string>());
 
             _logger.LogInformation("Import thành công: {FileName} vào bảng {TableName}", file.FileName, tableName);
 

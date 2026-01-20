@@ -32,30 +32,48 @@ async function testChatMemory() {
   const hasSQLUser = !!process.env.SQL_SERVER_USER;
   const hasSQLPassword = !!process.env.SQL_SERVER_PASSWORD;
   const hasSQLDatabase = !!process.env.SQL_SERVER_DATABASE;
+  const useWindowsAuth = !hasSQLUser && !hasSQLPassword;
 
   console.log('   SQL_SERVER_HOST:', hasSQLHost ? '✅ Set' : '❌ Not set');
-  console.log('   SQL_SERVER_USER:', hasSQLUser ? '✅ Set' : '❌ Not set');
-  console.log('   SQL_SERVER_PASSWORD:', hasSQLPassword ? '✅ Set' : '❌ Not set');
+  console.log('   Authentication:', useWindowsAuth ? '✅ Windows Authentication' : 'SQL Server Authentication');
+  console.log('   SQL_SERVER_USER:', hasSQLUser ? '✅ Set' : '❌ Not set (using Windows Auth)');
+  console.log('   SQL_SERVER_PASSWORD:', hasSQLPassword ? '✅ Set' : '❌ Not set (using Windows Auth)');
   console.log('   SQL_SERVER_DATABASE:', hasSQLDatabase ? '✅ Set' : '❌ Not set');
 
-  if (!hasSQLHost || !hasSQLUser || !hasSQLPassword) {
+  if (!hasSQLHost) {
     console.log('\n⚠️ SQL Server chưa được cấu hình đầy đủ!');
+    console.log('   Hệ thống sẽ fallback vào Firestore.\n');
+  } else if (useWindowsAuth) {
+    console.log('\n✅ SQL Server sẽ sử dụng Windows Authentication (Integrated Security)');
+  } else if (!hasSQLUser || !hasSQLPassword) {
+    console.log('\n⚠️ SQL Server Authentication chưa được cấu hình đầy đủ!');
+    console.log('   Nếu muốn dùng Windows Authentication, không cần set SQL_SERVER_USER và SQL_SERVER_PASSWORD.');
     console.log('   Hệ thống sẽ fallback vào Firestore.\n');
   }
 
   // Test 2: Initialize SQL Connection Pool
   let sqlPoolInitialized = false;
-  if (hasSQLHost && hasSQLUser && hasSQLPassword) {
+  if (hasSQLHost && (useWindowsAuth || (hasSQLUser && hasSQLPassword))) {
     console.log('\n📋 Test 2: Khởi tạo SQL Connection Pool');
     try {
-      await initializeSQLPool({
+      // Build config object - omit user/password for Windows Authentication
+      const sqlConfig = {
         server: process.env.SQL_SERVER_HOST,
-        user: process.env.SQL_SERVER_USER,
-        password: process.env.SQL_SERVER_PASSWORD,
         database: process.env.SQL_SERVER_DATABASE || 'THITHI_AI',
         port: parseInt(process.env.SQL_SERVER_PORT || '1433'),
         encrypt: process.env.SQL_SERVER_ENCRYPT !== 'false'
-      });
+      };
+      
+      // Only add user/password if provided (for SQL Server Authentication)
+      // If omitted, Windows Authentication will be used
+      if (process.env.SQL_SERVER_USER) {
+        sqlConfig.user = process.env.SQL_SERVER_USER;
+      }
+      if (process.env.SQL_SERVER_PASSWORD) {
+        sqlConfig.password = process.env.SQL_SERVER_PASSWORD;
+      }
+      
+      await initializeSQLPool(sqlConfig);
       sqlPoolInitialized = true;
       console.log('   ✅ SQL Connection Pool initialized');
     } catch (error) {

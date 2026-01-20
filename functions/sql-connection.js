@@ -3,9 +3,29 @@
  * Handles connection pooling and database operations for TSMay data
  */
 
-const sql = require('mssql');
+// Conditionally load driver based on authentication type
+// msnodesqlv8 is for Windows Auth only, regular mssql for SQL Auth
+let sql = null;
+let driverType = null;
 
 let pool = null;
+
+// #region agent log helper (debug-mode)
+function dbg(payload) {
+  try {
+    fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'debug-session',
+        runId: 'pre-fix-sqlauth',
+        timestamp: Date.now(),
+        ...payload,
+      }),
+    }).catch(() => {});
+  } catch (_) {}
+}
+// #endregion
 
 /**
  * Initialize SQL Server connection pool
@@ -17,25 +37,136 @@ async function initializeSQLPool(config) {
     return pool;
   }
 
-  const sqlConfig = {
-    user: config.user || process.env.SQL_SERVER_USER,
-    password: config.password || process.env.SQL_SERVER_PASSWORD,
-    server: config.server || process.env.SQL_SERVER_HOST,
-    database: config.database || process.env.SQL_SERVER_DATABASE || 'THITHI_AI',
-    port: config.port || parseInt(process.env.SQL_SERVER_PORT || '1433'),
-    options: {
-      encrypt: config.encrypt !== false, // Use encryption by default (Azure SQL requires this)
-      trustServerCertificate: config.trustServerCertificate || false,
-      enableArithAbort: true,
-      connectionTimeout: 30000,
-      requestTimeout: 30000
+  // Determine if using Windows Authentication
+  const useWindowsAuth = !config.user && !config.password && 
+                         !process.env.SQL_SERVER_USER && 
+                         !process.env.SQL_SERVER_PASSWORD;
+
+  const server = config.server || process.env.SQL_SERVER_HOST;
+  const database = config.database || process.env.SQL_SERVER_DATABASE || 'THITHI_AI';
+  const port = config.port || parseInt(process.env.SQL_SERVER_PORT || '1433');
+  const encrypt = config.encrypt !== false;
+  const trustServerCertificate = config.trustServerCertificate || false;
+
+  let sqlConfig;
+
+  dbg({
+    hypothesisId: 'H1',
+    location: 'sql-connection.js:initializeSQLPool:pre-config',
+    message: 'init called',
+    data: {
+      server,
+      database,
+      port,
+      encrypt,
+      trustServerCertificate,
+      useWindowsAuth,
+      hasUser: !!(config.user || process.env.SQL_SERVER_USER),
+      hasPassword: !!(config.password || process.env.SQL_SERVER_PASSWORD),
     },
-    pool: {
-      max: 10,
-      min: 0,
-      idleTimeoutMillis: 30000
+  });
+
+  // Load appropriate driver based on authentication type
+  if (!sql) {
+    if (useWindowsAuth) {
+      // Use msnodesqlv8 driver for Windows Authentication
+      sql = require('mssql/msnodesqlv8');
+      driverType = 'msnodesqlv8';
+      dbg({
+        hypothesisId: 'H1',
+        location: 'sql-connection.js:initializeSQLPool:driver-load',
+        message: 'Loaded msnodesqlv8 driver for Windows Auth',
+        data: { driverType: 'msnodesqlv8', useWindowsAuth: true },
+      });
+    } else {
+      // Use regular mssql driver for SQL Server Authentication
+      sql = require('mssql');
+      driverType = 'mssql';
+      dbg({
+        hypothesisId: 'H1',
+        location: 'sql-connection.js:initializeSQLPool:driver-load',
+        message: 'Loaded mssql driver for SQL Auth',
+        data: { driverType: 'mssql', useWindowsAuth: false },
+      });
     }
-  };
+  }
+
+  // Use Windows Authentication if no user/password provided
+  if (useWindowsAuth) {
+    // Use msnodesqlv8 driver for Windows Authentication
+    // Build connection string for Windows Authentication
+    let connectionString = `Server=${server}`;
+    if (port && port !== 1433) {
+      connectionString += `,${port}`;
+    }
+    connectionString += `;Database=${database}`;
+    connectionString += `;Integrated Security=true`;
+    connectionString += `;TrustServerCertificate=${trustServerCertificate}`;
+    if (encrypt) {
+      connectionString += `;Encrypt=true`;
+    } else {
+      connectionString += `;Encrypt=false`;
+    }
+    connectionString += `;Connection Timeout=30`;
+
+    sqlConfig = {
+      connectionString: connectionString,
+      options: {
+        enableArithAbort: true,
+        requestTimeout: 30000
+      },
+      pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000
+      }
+    };
+    console.log('🔐 Using Windows Authentication (Integrated Security)');
+    dbg({
+      hypothesisId: 'H1',
+      location: 'sql-connection.js:initializeSQLPool:windows-auth-config',
+      message: 'Windows Auth config created',
+      data: { connectionString: connectionString.replace(/Password=[^;]+/gi, 'Password=***') },
+    });
+  } else {
+    // Use SQL Server Authentication
+    const user = config.user || process.env.SQL_SERVER_USER;
+    const password = config.password || process.env.SQL_SERVER_PASSWORD;
+    sqlConfig = {
+      user: user,
+      password: password,
+      server: server,
+      database: database,
+      port: port,
+      options: {
+        encrypt: encrypt,
+        trustServerCertificate: trustServerCertificate,
+        enableArithAbort: true,
+        connectionTimeout: 30000,
+        requestTimeout: 30000
+      },
+      pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000
+      }
+    };
+    console.log('🔐 Using SQL Server Authentication');
+    console.log(`🔍 DEBUG: Driver type: ${driverType}, User: ${user}, Server: ${server}:${port}, Database: ${database}`);
+    dbg({
+      hypothesisId: 'H1',
+      location: 'sql-connection.js:initializeSQLPool:sql-auth-config',
+      message: 'SQL Auth config created',
+      data: {
+        server,
+        database,
+        port,
+        user,
+        hasPassword: !!password,
+        driverType,
+      },
+    });
+  }
 
   try {
     // #region agent log
@@ -43,11 +174,12 @@ async function initializeSQLPool(config) {
       location: 'sql-connection.js:41',
       message: 'Attempting SQL connection',
       data: {
-        server: sqlConfig.server,
-        database: sqlConfig.database,
-        port: sqlConfig.port,
-        user: sqlConfig.user ? '***' : null,
-        hasPassword: !!sqlConfig.password
+        server: server,
+        database: database,
+        port: port,
+        authentication: useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication',
+        user: useWindowsAuth ? null : (sqlConfig.user ? '***' : null),
+        hasPassword: useWindowsAuth ? false : !!sqlConfig.password
       },
       timestamp: Date.now(),
       sessionId: 'debug-session',
@@ -62,12 +194,28 @@ async function initializeSQLPool(config) {
       }).catch(() => {});
     } catch (e) {}
     console.log('🔍 DEBUG: Attempting SQL connection', {
-      server: sqlConfig.server,
-      database: sqlConfig.database,
-      port: sqlConfig.port
+      server: server,
+      database: database,
+      port: port,
+      authentication: useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication'
     });
     // #endregion
+    console.log(`🔍 DEBUG: About to connect with driver: ${driverType}`);
+    console.log(`🔍 DEBUG: Config keys: ${Object.keys(sqlConfig).join(', ')}`);
+    dbg({
+      hypothesisId: 'H1',
+      location: 'sql-connection.js:initializeSQLPool:before-connect',
+      message: 'About to call sql.connect',
+      data: { driverType, useWindowsAuth, configKeys: Object.keys(sqlConfig) },
+    });
     pool = await sql.connect(sqlConfig);
+    console.log(`✅ DEBUG: Connection successful with driver: ${driverType}`);
+    dbg({
+      hypothesisId: 'H1',
+      location: 'sql-connection.js:initializeSQLPool:after-connect',
+      message: 'sql.connect succeeded',
+      data: { driverType, hasPool: !!pool },
+    });
     // #region agent log
     const successLog = {
       location: 'sql-connection.js:58',
@@ -97,8 +245,9 @@ async function initializeSQLPool(config) {
         error: error.message,
         code: error.code,
         name: error.name,
-        server: sqlConfig.server,
-        port: sqlConfig.port,
+        server: server,
+        port: port,
+        authentication: useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication',
         stack: error.stack?.substring(0, 300)
       },
       timestamp: Date.now(),
@@ -117,10 +266,33 @@ async function initializeSQLPool(config) {
       error: error.message,
       code: error.code,
       name: error.name,
-      server: sqlConfig.server,
-      port: sqlConfig.port
+      server: server,
+      port: port,
+      authentication: useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication'
     });
     // #endregion
+    console.error(`❌ DEBUG: Connection failed with driver: ${driverType}`);
+    console.error(`❌ DEBUG: Error details:`, {
+      message: error.message,
+      code: error.code,
+      name: error.name,
+      stack: error.stack?.substring(0, 200),
+    });
+    dbg({
+      hypothesisId: 'H1',
+      location: 'sql-connection.js:initializeSQLPool:error',
+      message: 'Connection error occurred',
+      data: {
+        errorMessage: error.message,
+        errorCode: error.code,
+        errorName: error.name,
+        driverType,
+        useWindowsAuth,
+        server,
+        database,
+        port,
+      },
+    });
     console.error('❌ Error initializing SQL Server connection:', error);
     throw error;
   }

@@ -43,6 +43,7 @@ public class VectorSearchService
         // Bước 0: Thử tìm kiếm chính xác theo mã (keyword search) trước
         // Ví dụ: TBKT 22240T, số máy T00015298, v.v.
         var exactMatches = await GetExactMatchesAsync(query, tableName, topN);
+
         if (exactMatches.Count > 0)
         {
             _logger.LogInformation("Tìm thấy {Count} kết quả bằng keyword search, trả về luôn mà không cần vector search", exactMatches.Count);
@@ -57,34 +58,130 @@ public class VectorSearchService
             return new List<SearchResult>();
         }
 
-        // Bước 2: Lấy tất cả vectors từ database
-        var allVectors = await GetAllVectorsFromTableAsync(tableName);
-
-        // Bước 3: Tính cosine similarity và sắp xếp
-        var results = new List<SearchResult>();
-        foreach (var item in allVectors)
+        // Bước 2: Kiểm tra xem có hỗ trợ VECTOR type (SQL Server 2025+) không
+        bool useNativeVector = await CheckVectorSupportAsync(tableName);
+        
+        List<SearchResult> topResults;
+        
+        if (useNativeVector)
         {
-            var similarity = CalculateCosineSimilarity(queryVector, item.Vector);
-            if (similarity >= similarityThreshold)
-            {
-                results.Add(new SearchResult
-                {
-                    Content = item.Content,
-                    Similarity = similarity,
-                    Id = item.Id
-                });
-            }
+            // SQL Server 2025+: Sử dụng native VECTOR_DISTANCE function
+            topResults = await SearchWithNativeVectorAsync(queryVector, tableName, topN, similarityThreshold);
         }
+        else
+        {
+            // SQL Server 2022 hoặc cũ hơn: Tính toán trong application
+            var allVectors = await GetAllVectorsFromTableAsync(tableName);
 
-        // Sắp xếp theo similarity giảm dần và lấy topN
-        var topResults = results
-            .OrderByDescending(r => r.Similarity)
-            .Take(topN)
-            .ToList();
+            // Bước 3: Tính cosine similarity và sắp xếp
+            var results = new List<SearchResult>();
+            foreach (var item in allVectors)
+            {
+                var similarity = CalculateCosineSimilarity(queryVector, item.Vector);
+                if (similarity >= similarityThreshold)
+                {
+                    results.Add(new SearchResult
+                    {
+                        Content = item.Content,
+                        Similarity = similarity,
+                        Id = item.Id
+                    });
+                }
+            }
+
+            // Sắp xếp theo similarity giảm dần và lấy topN
+            topResults = results
+                .OrderByDescending(r => r.Similarity)
+                .Take(topN)
+                .ToList();
+        }
 
         _logger.LogInformation("Tìm thấy {Count} kết quả với similarity >= {Threshold}", topResults.Count, similarityThreshold);
 
         return topResults;
+    }
+
+    /// <summary>
+    /// Kiểm tra xem SQL Server có hỗ trợ VECTOR type không (SQL Server 2025+)
+    /// </summary>
+    private async Task<bool> CheckVectorSupportAsync(string tableName)
+    {
+        string safeTableName = new string(tableName.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+        if (string.IsNullOrWhiteSpace(safeTableName))
+        {
+            return false;
+        }
+
+        using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        // Check SQL Server version and if VECTOR column exists
+        string checkSql = $@"
+            SELECT 
+                CASE 
+                    WHEN CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(50)) >= '16.0' 
+                         AND EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.[{safeTableName}]') AND name = 'Embedding')
+                    THEN 1 
+                    ELSE 0 
+                END AS HasVectorSupport";
+
+        using var cmd = new SqlCommand(checkSql, conn);
+        var result = await cmd.ExecuteScalarAsync();
+        return result != null && Convert.ToInt32(result) == 1;
+    }
+
+    /// <summary>
+    /// Tìm kiếm sử dụng native VECTOR_DISTANCE function (SQL Server 2025+)
+    /// </summary>
+    private async Task<List<SearchResult>> SearchWithNativeVectorAsync(
+        List<float> queryVector, 
+        string tableName, 
+        int topN, 
+        double similarityThreshold)
+    {
+        string safeTableName = new string(tableName.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+        if (string.IsNullOrWhiteSpace(safeTableName))
+        {
+            return new List<SearchResult>();
+        }
+
+        // Convert query vector to string format for SQL Server
+        string vectorString = "[" + string.Join(",", queryVector.Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture))) + "]";
+
+        using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        // Use native VECTOR_DISTANCE function
+        // VECTOR_DISTANCE returns distance (0 = identical), so similarity = 1 - distance
+        string sql = $@"
+            SELECT TOP (@topN)
+                ID,
+                Content,
+                (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR(384)), COSINE)) AS Similarity
+            FROM dbo.[{safeTableName}]
+            WHERE Embedding IS NOT NULL
+              AND (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR(384)), COSINE)) >= @threshold
+            ORDER BY VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR(384)), COSINE) ASC";
+
+        var results = new List<SearchResult>();
+        using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@queryVector", vectorString);
+        cmd.Parameters.AddWithValue("@topN", topN);
+        cmd.Parameters.AddWithValue("@threshold", similarityThreshold);
+
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            results.Add(new SearchResult
+            {
+                Id = reader.GetInt32(0),
+                Content = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                Similarity = reader.GetDouble(2)
+            });
+        }
+
+        _logger.LogInformation("Tìm thấy {Count} kết quả sử dụng native VECTOR search", results.Count);
+        return results;
     }
 
     /// <summary>
@@ -94,12 +191,53 @@ public class VectorSearchService
     /// </summary>
     private async Task<List<SearchResult>> GetExactMatchesAsync(string query, string tableName, int topN)
     {
-        // Trích xuất các token có thể là mã (chứa số, chữ T, không có khoảng trắng)
-        var tokens = query
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(t => t.Length >= 5 && t.Any(char.IsDigit))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // Trích xuất các token có thể là mã (chứa số, có thể có chữ cái ở cuối như 22240T)
+        // Hoặc date format (01/02/2021, 01-02-2021, etc.)
+        var tokens = new List<string>();
+        var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        
+        foreach (var word in words)
+        {
+            // Skip common words
+            if (word.Length < 3) continue;
+            
+            // Pattern 1: Date format (01/02/2021, 01-02-2021, 01.02.2021)
+            var datePattern = @"\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}";
+            var dateMatch = System.Text.RegularExpressions.Regex.Match(word, datePattern);
+            if (dateMatch.Success)
+            {
+                tokens.Add(word);
+                continue;
+            }
+            
+            // Pattern 2: Code với số + chữ cái (22240T, 20113B) - ít nhất 4 ký tự
+            if (word.Length >= 4 && word.Any(char.IsDigit))
+            {
+                var hasDigit = word.Any(char.IsDigit);
+                var hasLetter = word.Any(char.IsLetter);
+                
+                // Nếu có chữ cái, phải ở cuối (ví dụ: 22240T, không phải T22240)
+                if (hasLetter)
+                {
+                    var lastChar = word[word.Length - 1];
+                    var hasLetterAtEnd = char.IsLetter(lastChar);
+                    var digitsBefore = word.Substring(0, word.Length - 1).All(char.IsDigit);
+                    if (hasLetterAtEnd && digitsBefore && word.Length >= 5)
+                    {
+                        tokens.Add(word);
+                        continue;
+                    }
+                }
+                // Chỉ số: ít nhất 5 chữ số
+                else if (word.Length >= 5 && word.All(char.IsDigit))
+                {
+                    tokens.Add(word);
+                    continue;
+                }
+            }
+        }
+        
+        tokens = tokens.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         if (tokens.Count == 0)
         {
@@ -129,11 +267,42 @@ public class VectorSearchService
 
         string whereSql = string.Join(" OR ", whereClauses);
 
+        // Also search in column F (TBKT) if it exists
+        string checkColumnFSql = $@"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = 'dbo' 
+            AND TABLE_NAME = '{safeTableName}' 
+            AND COLUMN_NAME = 'F'";
+        
+        using var checkCmd = new SqlCommand(checkColumnFSql, conn);
+        var hasColumnF = Convert.ToInt32(await checkCmd.ExecuteScalarAsync()) > 0;
+
+        if (hasColumnF)
+        {
+            // Add search in column F (TBKT) as well
+            for (int i = 0; i < tokens.Count; i++)
+            {
+                var paramName = $"@f{i}";
+                whereClauses.Add($"[F] LIKE {paramName}");
+                cmd.Parameters.AddWithValue(paramName, $"%{tokens[i]}%");
+            }
+            whereSql = string.Join(" OR ", whereClauses);
+        }
+
+        // For count queries ("có bao nhiêu"), we need to get ALL matches, not just topN
+        // But we still limit to a reasonable number to avoid performance issues
+        var isCountQuery = query.ToLowerInvariant().Contains("có bao nhiêu") || 
+                          query.ToLowerInvariant().Contains("how many") ||
+                          query.ToLowerInvariant().Contains("count");
+        
+        var limitN = isCountQuery ? 1000 : topN; // Allow up to 1000 for count queries
+        
         cmd.CommandText = $@"
             SELECT TOP (@topN) ID, Content, VectorJson
             FROM dbo.[{safeTableName}]
             WHERE {whereSql}";
-        cmd.Parameters.AddWithValue("@topN", topN);
+        cmd.Parameters.AddWithValue("@topN", limitN);
 
         var results = new List<SearchResult>();
         using var reader = await cmd.ExecuteReaderAsync();

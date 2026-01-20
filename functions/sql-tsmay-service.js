@@ -33,14 +33,82 @@ async function upsertTSMayRecord(documentId, data, embedding = null, rowIndex = 
     const embeddingJson = embedding ? JSON.stringify(embedding) : null;
     const originalColumnsJson = originalColumns ? JSON.stringify(originalColumns) : null;
 
-    const result = await executeStoredProcedure('sp_upsert_tsmay', {
+    // For SQL Server 2025+: Convert embedding array to VECTOR string format
+    // Format: '[0.1,0.2,0.3]' which can be CAST to VECTOR type
+    let embeddingVectorString = null;
+    if (embedding && Array.isArray(embedding) && embedding.length > 0) {
+      embeddingVectorString = '[' + embedding.map(v => v.toString()).join(',') + ']';
+    }
+
+    // Check if stored procedure supports VECTOR parameter
+    // For SQL Server 2025+, we'll use a modified approach
+    // Try to use VECTOR parameter if available, otherwise fallback to JSON
+    const params = {
       documentId,
       dataJson,
-      embeddingJson,
+      embeddingJson, // Keep for backward compatibility
       rowIndex,
       originalColumns: originalColumnsJson
-    });
+    };
 
+    // Add VECTOR parameter if embedding exists (for SQL Server 2025+)
+    // Note: The stored procedure needs to be updated to accept VECTOR type
+    // For now, we'll use a direct query approach for VECTOR support
+    const { getSQLPool, executeQuery } = require('./sql-connection');
+    const pool = getSQLPool();
+    
+    if (pool && embeddingVectorString) {
+      // Check if VECTOR column exists
+      const checkVectorSql = `
+        SELECT COUNT(*) as cnt 
+        FROM sys.columns 
+        WHERE object_id = OBJECT_ID('TSMay') 
+        AND name = 'Embedding'`;
+      
+      try {
+        const checkResult = await executeQuery(checkVectorSql);
+        const hasVectorColumn = checkResult.recordset[0]?.cnt > 0;
+        
+        if (hasVectorColumn) {
+          // Use direct query with VECTOR type for SQL Server 2025+
+          const upsertSql = `
+            IF EXISTS (SELECT 1 FROM TSMay WHERE DocumentId = @documentId)
+            BEGIN
+              UPDATE TSMay
+              SET 
+                DataJson = @dataJson,
+                Embedding = CAST(@embeddingVector AS VECTOR(384)),
+                EmbeddingJson = @embeddingJson,
+                RowIndex = @rowIndex,
+                OriginalColumns = @originalColumns
+              WHERE DocumentId = @documentId;
+              SELECT SCOPE_IDENTITY() AS Id;
+            END
+            ELSE
+            BEGIN
+              INSERT INTO TSMay (DocumentId, DataJson, Embedding, EmbeddingJson, RowIndex, OriginalColumns)
+              VALUES (@documentId, @dataJson, CAST(@embeddingVector AS VECTOR(384)), @embeddingJson, @rowIndex, @originalColumns);
+              SELECT SCOPE_IDENTITY() AS Id;
+            END`;
+          
+          const result = await executeQuery(upsertSql, {
+            documentId,
+            dataJson,
+            embeddingVector: embeddingVectorString,
+            embeddingJson,
+            rowIndex,
+            originalColumns: originalColumnsJson
+          });
+          
+          return result.recordset[0]?.Id || null;
+        }
+      } catch (vectorError) {
+        console.warn('⚠️ VECTOR column check failed, using JSON fallback:', vectorError.message);
+      }
+    }
+
+    // Fallback to stored procedure with JSON (for SQL Server 2022 or when VECTOR not available)
+    const result = await executeStoredProcedure('sp_upsert_tsmay', params);
     return result.recordset[0]?.Id || null;
   } catch (error) {
     console.error('❌ Error upserting TSMay record:', error);
@@ -297,41 +365,106 @@ async function searchTSMayWithVector(question, options = {}) {
       return await searchTSMayWithText(question, options);
     }
 
-    // Get records from SQL Server
-    const queryEmbeddingJson = JSON.stringify(queryEmbedding);
-    const result = await executeStoredProcedure('sp_search_tsmay_vector', {
-      queryEmbeddingJson,
-      similarityThreshold,
-      topN: 100, // Get more records to calculate similarity
-      filterField,
-      filterValue
-    });
-
-    const records = result.recordset || [];
-
-    // Calculate similarity for each record
-    const recordsWithSimilarity = records.map(record => {
-      let similarity = 0;
-      
-      if (record.EmbeddingJson) {
-        try {
-          const recordEmbedding = JSON.parse(record.EmbeddingJson);
-          similarity = cosineSimilarity(queryEmbedding, recordEmbedding);
-        } catch (error) {
-          console.warn('Error parsing embedding for record', record.Id, error);
-        }
+    // Check if VECTOR column exists (SQL Server 2025+)
+    const { getSQLPool, executeQuery } = require('./sql-connection');
+    const pool = getSQLPool();
+    let useNativeVector = false;
+    
+    if (pool) {
+      try {
+        const checkVectorSql = `
+          SELECT COUNT(*) as cnt 
+          FROM sys.columns 
+          WHERE object_id = OBJECT_ID('TSMay') 
+          AND name = 'Embedding'`;
+        const checkResult = await executeQuery(checkVectorSql);
+        useNativeVector = checkResult.recordset[0]?.cnt > 0;
+      } catch (error) {
+        console.warn('⚠️ VECTOR column check failed, using JSON fallback:', error.message);
       }
+    }
 
-      return {
+    let records = [];
+    let recordsWithSimilarity = [];
+
+    if (useNativeVector) {
+      // SQL Server 2025+: Use native VECTOR_DISTANCE function
+      const queryEmbeddingVector = '[' + queryEmbedding.map(v => v.toString()).join(',') + ']';
+      
+      const searchSql = `
+        SELECT TOP (@topN)
+          Id,
+          DocumentId,
+          DataJson,
+          EmbeddingJson,
+          ImportedAt,
+          RowIndex,
+          OriginalColumns,
+          (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryEmbedding AS VECTOR(384)), COSINE)) AS Similarity
+        FROM TSMay
+        WHERE Embedding IS NOT NULL
+          AND (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryEmbedding AS VECTOR(384)), COSINE)) >= @similarityThreshold
+          ${filterField ? `AND JSON_VALUE(DataJson, CONCAT('$."', @filterField, '"')) = @filterValue` : ''}
+        ORDER BY VECTOR_DISTANCE(Embedding, CAST(@queryEmbedding AS VECTOR(384)), COSINE) ASC`;
+      
+      const params = {
+        queryEmbedding: queryEmbeddingVector,
+        similarityThreshold,
+        topN: 100
+      };
+      
+      if (filterField && filterValue) {
+        params.filterField = filterField;
+        params.filterValue = filterValue;
+      }
+      
+      const result = await executeQuery(searchSql, params);
+      records = result.recordset || [];
+      
+      recordsWithSimilarity = records.map(record => ({
         ...record,
-        similarity,
+        similarity: record.Similarity || 0,
         data: JSON.parse(record.DataJson || '{}'),
         originalColumns: record.OriginalColumns ? JSON.parse(record.OriginalColumns) : []
-      };
-    });
+      }));
+    } else {
+      // SQL Server 2022 or earlier: Use JSON and calculate in application
+      const queryEmbeddingJson = JSON.stringify(queryEmbedding);
+      const result = await executeStoredProcedure('sp_search_tsmay_vector', {
+        queryEmbeddingJson,
+        similarityThreshold,
+        topN: 100, // Get more records to calculate similarity
+        filterField,
+        filterValue
+      });
 
-    // Sort by similarity and filter
-    recordsWithSimilarity.sort((a, b) => b.similarity - a.similarity);
+      records = result.recordset || [];
+
+      // Calculate similarity for each record
+      recordsWithSimilarity = records.map(record => {
+        let similarity = 0;
+        
+        if (record.EmbeddingJson) {
+          try {
+            const recordEmbedding = JSON.parse(record.EmbeddingJson);
+            similarity = cosineSimilarity(queryEmbedding, recordEmbedding);
+          } catch (error) {
+            console.warn('Error parsing embedding for record', record.Id, error);
+          }
+        }
+
+        return {
+          ...record,
+          similarity,
+          data: JSON.parse(record.DataJson || '{}'),
+          originalColumns: record.OriginalColumns ? JSON.parse(record.OriginalColumns) : []
+        };
+      });
+
+      // Sort by similarity and filter
+      recordsWithSimilarity.sort((a, b) => b.similarity - a.similarity);
+    }
+    
     const filteredRecords = recordsWithSimilarity.filter(r => r.similarity > similarityThreshold);
 
     return {
@@ -487,11 +620,291 @@ async function migrateFromFirestore(limit = 1000, progressCallback = null) {
   }
 }
 
+/**
+ * Calculate statistics from TSMay data
+ * @param {string} calculationType - Type of calculation (mean, median, standardDeviation, variance, min, max, sum)
+ * @param {string} fieldName - Field name to calculate (e.g., "kVA", "Po (W)")
+ * @param {Object} options - Options including filterField and filterValue
+ * @returns {Promise<Object>} Calculation result
+ */
+async function calculateStatistics(calculationType, fieldName, options = {}) {
+  try {
+    const { filterField = null, filterValue = null } = options;
+    
+    console.log(`📊 Calculating ${calculationType} for field "${fieldName}"`, {
+      filterField,
+      filterValue
+    });
+    
+    // Build query to get records
+    let query = `
+      SELECT DataJson, Content
+      FROM TSMay
+      WHERE 1=1
+    `;
+    
+    const params = {};
+    
+    // Apply filter if specified
+    if (filterField && filterValue) {
+      // Escape filterField to prevent SQL injection
+      const escapedFilterField = filterField.replace(/'/g, "''");
+      const filterValueStr = filterValue.toString();
+      
+      query += ` AND (
+        -- Exact match with original field name
+        JSON_VALUE(DataJson, '$."${escapedFilterField}"') = @filterValue
+        -- Case-insensitive match
+        OR JSON_VALUE(DataJson, '$."${escapedFilterField.toUpperCase()}"') = @filterValue
+        OR JSON_VALUE(DataJson, '$."${escapedFilterField.toLowerCase()}"') = @filterValue
+        -- Match in Content field (for combined text like "250 - 212250026 - 2130478 - ...")
+        OR Content LIKE @filterValuePattern
+        -- Match in any JSON key-value pair (for sanitized column names)
+        OR EXISTS (
+          SELECT 1 
+          FROM OPENJSON(DataJson) 
+          WHERE [key] LIKE @filterFieldPattern 
+            AND ([value] = @filterValue OR [value] = CAST(@filterValue AS NVARCHAR(MAX)))
+        )
+      )`;
+      params.filterValue = filterValueStr;
+      params.filterValuePattern = `%${filterValueStr}%`;
+      params.filterFieldPattern = `%${escapedFilterField}%`;
+    }
+    
+    query += ` ORDER BY ImportedAt DESC`;
+    
+    const result = await executeQuery(query, params);
+    const records = result.recordset || [];
+    
+    if (records.length === 0) {
+      const filterMsg = filterField && filterValue 
+        ? ` với ${filterField} = ${filterValue}` 
+        : '';
+      return {
+        result: null,
+        formattedResult: `Không tìm thấy dữ liệu nào trong TSMay${filterMsg} để tính toán.`
+      };
+    }
+    
+    // Extract field values
+    const fieldValues = [];
+    let actualFieldName = null;
+    
+    // If fieldName is not specified, find all numeric fields and use the first priority one
+    if (!fieldName && records.length > 0) {
+      try {
+        const sampleData = JSON.parse(records[0].DataJson || '{}');
+        const priorityFields = [
+          'kVA', 'kva', 'Po (W)', 'Po', 'Io (%)', 'Io', 
+          'Pk75 (W)', 'Pk75', 'Uk75 (%)', 'Uk75',
+          'Uñm HV', 'Uđm HV', 'LV', 'Udm HV', 'A', 'G', 'H', 'I'
+        ];
+        
+        // Find priority field first
+        for (const priorityField of priorityFields) {
+          const foundField = Object.keys(sampleData).find(key => {
+            if (!key) return false;
+            const keyNormalized = key.toLowerCase().replace(/\s+/g, '');
+            const fieldNormalized = priorityField.toLowerCase().replace(/\s+/g, '');
+            return keyNormalized === fieldNormalized ||
+                   keyNormalized.includes(fieldNormalized) ||
+                   fieldNormalized.includes(keyNormalized);
+          });
+          
+          if (foundField) {
+            actualFieldName = foundField;
+            fieldName = foundField; // Update fieldName for later use
+            console.log(`📊 Auto-detected field: ${actualFieldName} (from priority: ${priorityField})`);
+            break;
+          }
+        }
+        
+        // If no priority field found, find first numeric field
+        if (!actualFieldName) {
+          for (const key of Object.keys(sampleData)) {
+            if (!key) continue;
+            const value = sampleData[key];
+            if (typeof value === 'number' || 
+                (typeof value === 'string' && !isNaN(parseFloat(value.replace(/[^\d.-]/g, ''))))) {
+              actualFieldName = key;
+              fieldName = key;
+              console.log(`📊 Auto-detected numeric field: ${actualFieldName}`);
+              break;
+            }
+          }
+        }
+        
+        if (!actualFieldName) {
+          console.warn('⚠️ Could not auto-detect field name. Available fields:', Object.keys(sampleData).slice(0, 10));
+        }
+      } catch (error) {
+        console.warn('Error finding field name:', error);
+      }
+    }
+    
+    // Extract values for the field
+    // First pass: Find the actual field name by checking all records
+    if (!actualFieldName && fieldName) {
+      for (const record of records) {
+        try {
+          const data = JSON.parse(record.DataJson || '{}');
+          actualFieldName = Object.keys(data).find(key => {
+            if (!key) return false;
+            const keyNormalized = key.toLowerCase().replace(/\s+/g, '');
+            const fieldNormalized = fieldName.toLowerCase().replace(/\s+/g, '');
+            return keyNormalized === fieldNormalized ||
+                   keyNormalized.includes(fieldNormalized) ||
+                   fieldNormalized.includes(keyNormalized);
+          });
+          if (actualFieldName) {
+            console.log(`📊 Found field "${actualFieldName}" matching "${fieldName}"`);
+            break;
+          }
+        } catch (error) {
+          console.warn('Error finding field name:', error);
+        }
+      }
+    }
+    
+    // Second pass: Extract values
+    for (const record of records) {
+      try {
+        const data = JSON.parse(record.DataJson || '{}');
+        
+        const fieldToUse = actualFieldName || fieldName;
+        if (fieldToUse && data[fieldToUse] != null) {
+          const value = data[fieldToUse];
+          let numValue = null;
+          
+          if (typeof value === 'number') {
+            numValue = value;
+          } else if (typeof value === 'string') {
+            // Remove non-numeric characters except decimal point and minus
+            const numStr = value.replace(/[^\d.-]/g, '');
+            const num = parseFloat(numStr);
+            numValue = isNaN(num) ? null : num;
+          }
+          
+          if (numValue !== null) {
+            fieldValues.push(numValue);
+          }
+        }
+      } catch (error) {
+        console.warn('Error parsing record:', error);
+      }
+    }
+    
+    console.log(`📊 Extracted ${fieldValues.length} numeric values from ${records.length} records for field "${actualFieldName || fieldName}"`);
+    
+    if (fieldValues.length === 0) {
+      const filterMsg = filterField && filterValue 
+        ? ` với ${filterField} = ${filterValue}` 
+        : '';
+      const fieldMsg = actualFieldName || fieldName || 'field số';
+      return {
+        result: null,
+        formattedResult: `Không tìm thấy giá trị số hợp lệ nào trong field "${fieldMsg}"${filterMsg} để tính toán.`
+      };
+    }
+    
+    // Perform calculation
+    let resultValue = null;
+    let resultLabel = '';
+    
+    switch (calculationType) {
+      case 'mean':
+        resultValue = fieldValues.reduce((sum, val) => sum + val, 0) / fieldValues.length;
+        resultLabel = 'Trung bình';
+        break;
+      
+      case 'median':
+        const sorted = [...fieldValues].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        resultValue = sorted.length % 2 === 0 
+          ? (sorted[mid - 1] + sorted[mid]) / 2 
+          : sorted[mid];
+        resultLabel = 'Trung vị';
+        break;
+      
+      case 'standardDeviation':
+        const mean = fieldValues.reduce((sum, val) => sum + val, 0) / fieldValues.length;
+        const variance = fieldValues.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / fieldValues.length;
+        resultValue = Math.sqrt(variance);
+        resultLabel = 'Độ lệch chuẩn';
+        break;
+      
+      case 'variance':
+        const mean2 = fieldValues.reduce((sum, val) => sum + val, 0) / fieldValues.length;
+        resultValue = fieldValues.reduce((sum, val) => sum + Math.pow(val - mean2, 2), 0) / fieldValues.length;
+        resultLabel = 'Phương sai';
+        break;
+      
+      case 'min':
+        resultValue = Math.min(...fieldValues);
+        resultLabel = 'Giá trị nhỏ nhất';
+        break;
+      
+      case 'max':
+        resultValue = Math.max(...fieldValues);
+        resultLabel = 'Giá trị lớn nhất';
+        break;
+      
+      case 'sum':
+        resultValue = fieldValues.reduce((sum, val) => sum + val, 0);
+        resultLabel = 'Tổng';
+        break;
+      
+      default:
+        throw new Error(`Loại tính toán "${calculationType}" chưa được hỗ trợ.`);
+    }
+    
+    // Format result
+    const formattedResult = typeof resultValue === 'number' && resultValue % 1 !== 0 
+      ? resultValue.toFixed(4) 
+      : resultValue.toString();
+    
+    const filterMsg = filterField && filterValue 
+      ? ` (lọc theo ${filterField} = ${filterValue})` 
+      : '';
+    
+    const formattedOutput = `**Kết quả tính toán thống kê từ dữ liệu TSMay:**
+    
+**${resultLabel}** của field **"${actualFieldName || fieldName}"**${filterMsg}: **${formattedResult}**
+
+**Thông tin:**
+- Số lượng bản ghi đã sử dụng: ${fieldValues.length}
+- Tổng số bản ghi được kiểm tra: ${records.length}
+- Field được tính toán: "${actualFieldName || fieldName}"
+
+${calculationType === 'standardDeviation' ? `
+**Giải thích:** Độ lệch chuẩn cho biết mức độ phân tán của dữ liệu. Giá trị càng lớn, dữ liệu càng phân tán.` : ''}
+${calculationType === 'mean' ? `
+**Giải thích:** Trung bình là giá trị trung bình cộng của tất cả các giá trị.` : ''}
+${calculationType === 'median' ? `
+**Giải thích:** Trung vị là giá trị ở giữa khi sắp xếp dữ liệu theo thứ tự tăng dần.` : ''}
+${calculationType === 'variance' ? `
+**Giải thích:** Phương sai là bình phương của độ lệch chuẩn, đo lường mức độ phân tán của dữ liệu.` : ''}`;
+    
+    return {
+      result: resultValue,
+      formattedResult: formattedOutput,
+      fieldName: actualFieldName || fieldName,
+      recordCount: fieldValues.length,
+      totalRecords: records.length
+    };
+  } catch (error) {
+    console.error('❌ Error calculating statistics:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   initializeEmbeddingFunctions,
   upsertTSMayRecord,
   generateAndSaveEmbedding,
   searchTSMayWithVector,
   searchTSMayWithText,
-  migrateFromFirestore
+  migrateFromFirestore,
+  calculateStatistics
 };

@@ -13,6 +13,8 @@ interface ExcelColumn {
   name: string;
   selected: boolean;
   index: number;
+  isForCalculation: boolean; // Cột cần chuẩn hóa cho tính toán (Price, StockQuantity, etc.)
+  isForVectorization: boolean; // Cột cần vectorize (tạo embedding)
 }
 
 interface ExcelRow {
@@ -215,16 +217,56 @@ export class ExcelImportComponent implements OnInit {
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         
-        // Chuyển đổi sang JSON
-        const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        // Xử lý merged cells: nếu có merged cells, copy giá trị vào tất cả các cells trong merged range
+        if (worksheet['!merges']) {
+          worksheet['!merges'].forEach((merge: any) => {
+            const startCell = XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c });
+            const endCell = XLSX.utils.encode_cell({ r: merge.e.r, c: merge.e.c });
+            const startValue = worksheet[startCell]?.v;
+            
+            if (startValue !== undefined && startValue !== null) {
+              // Copy giá trị vào tất cả các cells trong merged range
+              for (let row = merge.s.r; row <= merge.e.r; row++) {
+                for (let col = merge.s.c; col <= merge.e.c; col++) {
+                  const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+                  if (!worksheet[cellAddress]) {
+                    worksheet[cellAddress] = { v: startValue, t: 's' };
+                  }
+                }
+              }
+            }
+          });
+        }
+        
+        // Chuyển đổi sang JSON - đọc tất cả dữ liệu
+        const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, { 
+          header: 1,
+          defval: '',
+          raw: false
+        });
         
         if (jsonData.length === 0) {
           alert('File Excel trống hoặc không có dữ liệu.');
           return;
         }
 
-        // Dòng đầu tiên là header
-        const headers = jsonData[0] as any[];
+        // Tìm dòng header thực sự (có ít nhất 3 cột có giá trị và không phải dòng trống)
+        let headerRowIndex = 0;
+        for (let i = 0; i < Math.min(10, jsonData.length); i++) {
+          const row = jsonData[i] as any[];
+          if (row && row.length > 0) {
+            const nonEmptyCount = row.filter(cell => 
+              cell !== null && cell !== undefined && String(cell).trim() !== ''
+            ).length;
+            if (nonEmptyCount >= 3) {
+              headerRowIndex = i;
+              break;
+            }
+          }
+        }
+
+        // Dòng header đã tìm được
+        const headers = jsonData[headerRowIndex] as any[];
         
         if (!headers || headers.length === 0) {
           alert('File Excel không có header. Vui lòng kiểm tra lại file.');
@@ -258,10 +300,35 @@ export class ExcelImportComponent implements OnInit {
         // Tạo danh sách cột với tên đã xử lý
         this.columns = processedHeaders
           .map((headerName, index) => {
+            // Tự động detect các cột có thể dùng cho tính toán (số, giá tiền)
+            const lowerName = headerName.toLowerCase();
+            const isNumericColumn = lowerName.includes('price') || 
+                                   lowerName.includes('gia') || 
+                                   lowerName.includes('quantity') || 
+                                   lowerName.includes('soluong') ||
+                                   lowerName.includes('stock') ||
+                                   lowerName.includes('ton') ||
+                                   lowerName.includes('amount') ||
+                                   lowerName.includes('tong') ||
+                                   lowerName.includes('total') ||
+                                   lowerName.includes('sum');
+            
+            // Tự động detect các cột có thể dùng cho vectorization (mô tả, tên)
+            const isTextColumn = lowerName.includes('description') || 
+                                lowerName.includes('mota') ||
+                                lowerName.includes('name') ||
+                                lowerName.includes('ten') ||
+                                lowerName.includes('title') ||
+                                lowerName.includes('tieu') ||
+                                lowerName.includes('content') ||
+                                lowerName.includes('noidung');
+            
             return {
               name: headerName,
               selected: true, // Mặc định chọn tất cả
-              index: index
+              index: index,
+              isForCalculation: isNumericColumn, // Mặc định cho các cột số
+              isForVectorization: isTextColumn || !isNumericColumn // Mặc định cho các cột text
             };
           })
           .filter((col) => {
@@ -270,10 +337,11 @@ export class ExcelImportComponent implements OnInit {
           });
 
         // Chuyển đổi dữ liệu thành objects với tên cột đã xử lý
-        this.excelData = jsonData.slice(1).map((row: any[]) => {
+        // Bỏ qua dòng header và các dòng trước đó
+        this.excelData = jsonData.slice(headerRowIndex + 1).map((row: any[]) => {
           const rowObj: ExcelRow = {};
           processedHeaders.forEach((headerName, index) => {
-            rowObj[headerName] = row[index] || '';
+            rowObj[headerName] = row[index] !== undefined && row[index] !== null ? row[index] : '';
           });
           return rowObj;
         }).filter(row => {
@@ -329,6 +397,18 @@ export class ExcelImportComponent implements OnInit {
 
   getSelectedColumns(): string[] {
     return this.columns.filter(col => col && col.selected).map(col => col.name);
+  }
+
+  getColumnsForCalculation(): string[] {
+    return this.columns
+      .filter(col => col && col.selected && col.isForCalculation)
+      .map(col => col.name);
+  }
+
+  getColumnsForVectorization(): string[] {
+    return this.columns
+      .filter(col => col && col.selected && col.isForVectorization)
+      .map(col => col.name);
   }
 
   async importToFirestore(): Promise<void> {
@@ -453,10 +533,15 @@ export class ExcelImportComponent implements OnInit {
     this.uploadMessage = 'Đang import dữ liệu vào SQL Server...';
 
     try {
+      const columnsForCalculation = this.getColumnsForCalculation();
+      const columnsForVectorization = this.getColumnsForVectorization();
+      
       this.excelImportBackendService.importExcelToBackend(
         this.selectedFile,
         this.tableName,
-        selectedColumns
+        selectedColumns,
+        columnsForCalculation,
+        columnsForVectorization
       ).subscribe({
         next: (response) => {
           this.uploadProgress = 100;
