@@ -1133,8 +1133,9 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
           }
         },
         error: (error) => {
-          console.error('Error in vector search:', error);
-          // If search fails, proceed with original message
+          console.warn('⚠️ Vector search failed, continuing without vector search:', error);
+          // If search fails, proceed with original message (vector search is optional)
+          // Chat will continue normally without vector search results
           this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, []);
         }
       });
@@ -1202,39 +1203,45 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
           }
         }, 100);
       },
-      error: (error) => {
-        this.isLoading = false;
-        console.error('Error sending message:', error);
-        
-        let errorMessage = 'Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại sau.';
-        
-        // Provide more specific error messages
-        if (error.message) {
-          if (error.message.includes('chưa được cấu hình')) {
-            errorMessage = '⚠️ Firebase Function URL chưa được cấu hình.\n\nVui lòng:\n1. Mở file src/environments/environment.ts\n2. Cập nhật firebaseFunctionUrl với URL Function của bạn\n3. Rebuild và deploy lại ứng dụng\n\nXem file HUONG_DAN_CAU_HINH_FUNCTION.md để biết chi tiết.';
-          } else if (error.message.includes('CORS') || error.message.includes('kết nối')) {
-            errorMessage = '⚠️ Không thể kết nối đến server.\n\nVui lòng kiểm tra:\n1. Firebase Function URL đã đúng chưa?\n2. Function đã được deploy chưa?\n3. CORS đã được cấu hình trong Function chưa?';
-          } else if (error.message.includes('404')) {
-            errorMessage = '⚠️ Không tìm thấy Firebase Function.\n\nVui lòng kiểm tra URL trong environment.ts và đảm bảo Function đã được deploy.';
-          } else {
-            errorMessage = `⚠️ Lỗi: ${error.message}`;
+        error: (error) => {
+          this.isLoading = false;
+          console.error('Error sending message:', error);
+          
+          let errorMessage = 'Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại sau.';
+          
+          // Provide more specific error messages
+          if (error.message) {
+            if (error.message.includes('chưa được cấu hình')) {
+              errorMessage = '⚠️ Firebase Function URL chưa được cấu hình.\n\nVui lòng:\n1. Mở file src/environments/environment.ts\n2. Cập nhật firebaseFunctionUrl với URL Function của bạn\n3. Rebuild và deploy lại ứng dụng\n\nXem file HUONG_DAN_CAU_HINH_FUNCTION.md để biết chi tiết.';
+            } else if (error.message.includes('timeout') || error.message.includes('quá lâu')) {
+              errorMessage = '⚠️ Kết nối quá lâu.\n\nCó thể do:\n1. Server đang quá tải\n2. Kết nối mạng chậm\n3. Firebase Function đang xử lý request lớn\n\nVui lòng thử lại sau.';
+            } else if (error.message.includes('CORS') || error.message.includes('kết nối')) {
+              errorMessage = '⚠️ Không thể kết nối đến server.\n\nVui lòng kiểm tra:\n1. Firebase Function URL đã đúng chưa?\n2. Function đã được deploy chưa?\n3. CORS đã được cấu hình trong Function chưa?\n4. Kết nối internet có ổn định không?';
+            } else if (error.message.includes('404')) {
+              errorMessage = '⚠️ Không tìm thấy Firebase Function.\n\nVui lòng kiểm tra URL trong environment.ts và đảm bảo Function đã được deploy.';
+            } else if (error.message.includes('500')) {
+              errorMessage = '⚠️ Lỗi server (500).\n\nServer đang gặp sự cố. Vui lòng thử lại sau hoặc liên hệ quản trị viên.';
+            } else if (error.message.includes('503')) {
+              errorMessage = '⚠️ Service không khả dụng.\n\nFirebase Function đang bảo trì hoặc quá tải. Vui lòng thử lại sau.';
+            } else {
+              errorMessage = `⚠️ Lỗi: ${error.message}\n\nVui lòng thử lại sau hoặc liên hệ quản trị viên nếu lỗi vẫn tiếp tục.`;
+            }
           }
+          
+          this.messages.push({
+            role: 'assistant',
+            content: errorMessage,
+            timestamp: new Date()
+          });
+          this.shouldScroll = true;
+          
+          // Focus vào khung chat sau khi có lỗi
+          setTimeout(() => {
+            if (this.messageInput?.nativeElement) {
+              this.messageInput.nativeElement.focus();
+            }
+          }, 100);
         }
-        
-        this.messages.push({
-          role: 'assistant',
-          content: errorMessage,
-          timestamp: new Date()
-        });
-        this.shouldScroll = true;
-        
-        // Focus vào khung chat sau khi có lỗi
-        setTimeout(() => {
-          if (this.messageInput?.nativeElement) {
-            this.messageInput.nativeElement.focus();
-          }
-        }, 100);
-      }
     });
   }
 

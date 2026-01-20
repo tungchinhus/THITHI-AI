@@ -129,6 +129,9 @@ playwright/.cache/
 **/credentials.json
 **/*secret*.json
 **/*credential*.json
+# Google Cloud Service Account credentials (format: project-id-hash.json)
+**/thithi-*.json
+**/*-*-*-*.json
 
 # User-specific files
 *.rsuser

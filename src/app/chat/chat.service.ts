@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders, HttpErrorResponse } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
-import { catchError, switchMap } from 'rxjs/operators';
+import { catchError, switchMap, timeout, retry } from 'rxjs/operators';
 import { Auth, onAuthStateChanged } from 'firebase/auth';
 import { getFirebaseAuth } from '../firebase.config';
 import { environment } from '../../environments/environment';
@@ -150,7 +150,11 @@ export class ChatService {
       ...(userInfo && { userInfo })
     };
 
+    // Timeout: 30 giây cho chat (lâu hơn vì AI cần thời gian xử lý)
+    // Retry: 1 lần nếu timeout hoặc network error
     return this.http.post<ChatResponse>(this.apiUrl, body, { headers }).pipe(
+      timeout(30000), // 30 giây timeout
+      retry(1), // Retry 1 lần nếu fail
       catchError((error) => {
         console.error('ChatService: API Error:', error);
         return this.handleError(error);
@@ -180,22 +184,29 @@ export class ChatService {
   /**
    * Error handler
    */
-  private handleError(error: HttpErrorResponse): Observable<never> {
+  private handleError(error: HttpErrorResponse | any): Observable<never> {
     let errorMessage = 'Đã có lỗi xảy ra';
     
-    if (error.error instanceof ErrorEvent) {
+    // Handle timeout errors
+    if (error.name === 'TimeoutError' || error.message?.includes('timeout')) {
+      errorMessage = '⚠️ Kết nối quá lâu. Vui lòng thử lại sau.\n\nCó thể do:\n1. Server đang quá tải\n2. Kết nối mạng chậm\n3. Firebase Function đang xử lý request lớn';
+    } else if (error.error instanceof ErrorEvent) {
       // Client-side error
       errorMessage = `Lỗi: ${error.error.message}`;
-    } else {
+    } else if (error instanceof HttpErrorResponse) {
       // Server-side error
       if (error.status === 0) {
-        errorMessage = 'Không thể kết nối đến server. Vui lòng kiểm tra:\n1. Firebase Function URL đã được cấu hình đúng chưa?\n2. Function đã được deploy chưa?\n3. CORS đã được cấu hình trong Function chưa?';
+        errorMessage = '⚠️ Không thể kết nối đến server.\n\nVui lòng kiểm tra:\n1. Firebase Function URL đã được cấu hình đúng chưa?\n2. Function đã được deploy chưa?\n3. CORS đã được cấu hình trong Function chưa?\n4. Kết nối internet có ổn định không?';
       } else if (error.status === 404) {
-        errorMessage = 'Không tìm thấy Firebase Function. Vui lòng kiểm tra URL trong environment.ts';
+        errorMessage = '⚠️ Không tìm thấy Firebase Function.\n\nVui lòng kiểm tra URL trong environment.ts và đảm bảo Function đã được deploy.';
       } else if (error.status === 403) {
-        errorMessage = 'Không có quyền truy cập. Vui lòng kiểm tra Firebase Auth và CORS settings.';
+        errorMessage = '⚠️ Không có quyền truy cập.\n\nVui lòng kiểm tra Firebase Auth và CORS settings trong Function.';
+      } else if (error.status === 500) {
+        errorMessage = '⚠️ Lỗi server (500).\n\nServer đang gặp sự cố. Vui lòng thử lại sau hoặc liên hệ quản trị viên.';
+      } else if (error.status === 503) {
+        errorMessage = '⚠️ Service không khả dụng.\n\nFirebase Function đang bảo trì hoặc quá tải. Vui lòng thử lại sau.';
       } else {
-        errorMessage = `Mã lỗi: ${error.status}\nThông báo: ${error.message}`;
+        errorMessage = `⚠️ Mã lỗi: ${error.status}\nThông báo: ${error.message || 'Lỗi không xác định'}`;
       }
     }
     
