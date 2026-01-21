@@ -930,8 +930,9 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
                 console.log('⚠️ No chat history provided');
               }
 
-              // 3. Context - Kết hợp email, OneDrive và TSMay context
+              // 3. Context - Kết hợp email, OneDrive, TSMay và RAG context
               let combinedContext = '';
+              let ragSources = []; // RAG sources để thêm vào response sau
               if (emailContext) {
                 combinedContext += `📧 THÔNG TIN EMAIL TỪ OUTLOOK:\n${emailContext}\n\nKhi người dùng hỏi về email, hãy sử dụng thông tin email ở trên để trả lời. Nếu không tìm thấy email phù hợp, hãy thông báo rõ ràng.\n\n`;
                 console.log('✅ Email context prepared for prompt:', emailContext.substring(0, 200));
@@ -1014,13 +1015,115 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
                 console.log('✅ TSMay context prepared for prompt:', tsMayContext.substring(0, 200));
               }
 
+              // Add RAG context (tài liệu từ rag_documents) to combined context
+              let ragContext = '';
+              
+              // Kiểm tra điều kiện RAG với logging chi tiết
+              const ragServiceAvailable = !!ragService;
+              const sqlPoolAvailable = sqlPoolInitialized;
+              const apiKeyAvailable = !!geminiApiKey;
+              
+              console.log('🔍 RAG Search Check:', {
+                ragService: ragServiceAvailable ? '✅ loaded' : '❌ not loaded',
+                sqlPool: sqlPoolAvailable ? '✅ initialized' : '❌ not initialized',
+                apiKey: apiKeyAvailable ? '✅ available' : '❌ missing',
+                question: question.substring(0, 50)
+              });
+              
+              if (ragService && sqlPoolInitialized && geminiApiKey) {
+                try {
+                  console.log('🔍 Starting RAG search for:', question.substring(0, 100));
+                  
+                  // Tăng topK lên 8 để có nhiều context hơn, sau đó filter theo similarity
+                  const ragResults = await ragService.searchSimilar(
+                    question,
+                    geminiApiKey,
+                    'rag_documents',
+                    8 // topK = 8 chunks (tăng từ 4 lên 8)
+                  );
+                  
+                  console.log(`📊 RAG search returned ${ragResults ? ragResults.length : 0} results`);
+                  
+                  if (ragResults && ragResults.length > 0) {
+                    // Log similarity scores để debug
+                    const similarityScores = ragResults.map(r => r.similarity || 0);
+                    const maxSim = Math.max(...similarityScores);
+                    const minSim = Math.min(...similarityScores);
+                    const avgSim = similarityScores.reduce((a, b) => a + b, 0) / similarityScores.length;
+                    
+                    console.log(`📊 Similarity scores: min=${minSim.toFixed(4)}, max=${maxSim.toFixed(4)}, avg=${avgSim.toFixed(4)}`);
+                    
+                    // Filter theo similarity threshold (chỉ lấy similarity > 0.3)
+                    // Giảm threshold để lấy nhiều kết quả hơn
+                    const SIMILARITY_THRESHOLD = 0.25; // Giảm từ 0.3 xuống 0.25 để lấy nhiều hơn
+                    const filteredResults = ragResults.filter(r => (r.similarity || 0) >= SIMILARITY_THRESHOLD);
+                    
+                    console.log(`📊 Filtered results (similarity >= ${SIMILARITY_THRESHOLD}): ${filteredResults.length}/${ragResults.length}`);
+                    
+                    if (filteredResults.length > 0) {
+                      // Lấy top 6 kết quả sau khi filter
+                      const topResults = filteredResults.slice(0, 6);
+                      
+                      console.log(`✅ Using ${topResults.length} relevant RAG chunks (similarity >= ${SIMILARITY_THRESHOLD})`);
+                      
+                      // Log chi tiết từng result
+                      topResults.forEach((r, idx) => {
+                        console.log(`   ${idx + 1}. [${r.fileName}, trang ${r.pageNumber}] similarity=${(r.similarity || 0).toFixed(4)}, content preview: ${(r.content || '').substring(0, 80)}...`);
+                      });
+                      
+                      // Tạo context từ RAG results
+                      ragContext = topResults.map((ctx, idx) => {
+                        return `[${ctx.fileName}, trang ${ctx.pageNumber}, độ tương đồng: ${((ctx.similarity || 0) * 100).toFixed(1)}%]: ${ctx.content}`;
+                      }).join('\n\n');
+                      
+                      // Tạo sources từ RAG results
+                      ragSources = topResults.map(ctx => ({
+                        file: ctx.fileName,
+                        page: ctx.pageNumber,
+                        content: ctx.content.substring(0, 200) + (ctx.content.length > 200 ? '...' : ''),
+                        similarity: ctx.similarity || 0
+                      }));
+                      
+                      // Thêm RAG context vào combinedContext với instruction rõ ràng hơn
+                      combinedContext += `\n📚 THÔNG TIN TỪ TÀI LIỆU PDF ĐÃ ĐƯỢC LƯU TRỮ (RAG):\n${ragContext}\n\n**QUAN TRỌNG:** Khi người dùng hỏi về nội dung trong tài liệu PDF, bạn PHẢI sử dụng thông tin ở trên để trả lời. Nếu người dùng hỏi "đoạn này nằm ở đâu" hoặc "file nào", hãy trả lời dựa trên thông tin FileName và PageNumber ở trên. Nếu không tìm thấy thông tin trong tài liệu, hãy nói rõ "Tôi không tìm thấy thông tin này trong tài liệu đã được lưu trữ".\n\n`;
+                      
+                      console.log(`✅ RAG context added to prompt (${ragContext.length} chars, ${ragSources.length} sources)`);
+                    } else {
+                      console.log(`⚠️ No RAG results above similarity threshold ${SIMILARITY_THRESHOLD}`);
+                      console.log(`   Top similarity scores: ${similarityScores.slice(0, 3).map(s => s.toFixed(4)).join(', ')}`);
+                    }
+                  } else {
+                    console.log('⚠️ RAG search returned empty results');
+                    console.log('   Possible reasons:');
+                    console.log('   - No data in rag_documents table');
+                    console.log('   - Embedding generation failed');
+                    console.log('   - SQL query error');
+                  }
+                } catch (ragError) {
+                  console.error('❌ RAG search error:', ragError.message);
+                  console.error('   Stack:', ragError.stack?.substring(0, 500));
+                  console.error('   Error details:', {
+                    name: ragError.name,
+                    code: ragError.code,
+                    message: ragError.message
+                  });
+                  // Không throw error, tiếp tục với context hiện tại
+                }
+              } else {
+                console.log('⚠️ RAG search skipped - missing requirements:', {
+                  ragService: ragServiceAvailable,
+                  sqlPool: sqlPoolAvailable,
+                  apiKey: apiKeyAvailable
+                });
+              }
+
               // Add memory context to combined context
               if (memoryContext) {
                 combinedContext = memoryContext + '\n' + combinedContext;
               }
               
-              if (!combinedContext && !memoryContext) {
-                combinedContext = 'Không có tài liệu tham khảo từ email, OneDrive hoặc TSMay.';
+              if (!combinedContext && !memoryContext && !ragContext) {
+                combinedContext = 'Không có tài liệu tham khảo từ email, OneDrive, TSMay hoặc RAG documents.';
               }
 
               // 4. UserQuery - Câu hỏi của user
@@ -1274,11 +1377,15 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
       }
       
       // ============================================
-      // TODO: Thêm logic RAG nếu cần
+      // RAG Integration: Thêm RAG sources vào sources array
+      // (RAG context đã được thêm vào combinedContext ở trên)
       // ============================================
-      // 1. Tìm kiếm tài liệu liên quan từ vector database
-      // 2. Thêm context vào prompt
-      // 3. Cập nhật sources array với tài liệu tìm được
+      // RAG sources đã được tạo ở trên trong phần build combinedContext
+      // Nếu có ragSources, thêm vào sources array
+      if (typeof ragSources !== 'undefined' && ragSources.length > 0) {
+        sources = [...sources, ...ragSources];
+        console.log(`✅ Added ${ragSources.length} RAG sources to response`);
+      }
       
       // Tạo response object với các field đã được parse
       const response = {

@@ -929,19 +929,61 @@ async function ingestFolder(folderPath, apiKey, tableName = 'rag_documents') {
  */
 async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 4) {
   try {
+    console.log(`🔍 [RAG] Starting searchSimilar:`, {
+      query: query.substring(0, 100),
+      tableName,
+      topK,
+      hasApiKey: !!apiKey
+    });
+    
     // Generate embedding for query
-    console.log(`🔍 Generating embedding for query...`);
-    const queryEmbedding = await generateEmbedding(query, apiKey);
+    console.log(`🔍 [RAG] Generating embedding for query...`);
+    let queryEmbedding;
+    try {
+      queryEmbedding = await generateEmbedding(query, apiKey);
+    } catch (embedError) {
+      console.error('❌ [RAG] Embedding generation failed:', embedError.message);
+      throw new Error(`Failed to generate query embedding: ${embedError.message}`);
+    }
     
     if (!queryEmbedding || queryEmbedding.length === 0) {
-      throw new Error('Failed to generate query embedding');
+      console.error('❌ [RAG] Empty embedding returned');
+      throw new Error('Failed to generate query embedding: empty result');
     }
+    
+    console.log(`✅ [RAG] Embedding generated: ${queryEmbedding.length} dimensions`);
 
     const pool = getSQLPool();
     if (!pool) {
+      console.error('❌ [RAG] SQL pool not initialized');
       throw new Error('SQL Server connection pool not initialized');
     }
+    
+    console.log(`✅ [RAG] SQL pool available`);
 
+    // Check if table exists and get record count
+    let tableExists = false;
+    let totalRecords = 0;
+    let recordsWithEmbedding = 0;
+    
+    try {
+      const tableCheckResult = await pool.request().query(`
+        SELECT COUNT(*) AS TotalRecords
+        FROM dbo.[${tableName}]
+      `);
+      totalRecords = tableCheckResult.recordset[0].TotalRecords;
+      tableExists = true;
+      console.log(`📊 [RAG] Table ${tableName} exists with ${totalRecords} total records`);
+    } catch (tableError) {
+      console.error(`❌ [RAG] Table ${tableName} does not exist or error:`, tableError.message);
+      throw new Error(`Table ${tableName} does not exist. Please run ingest first.`);
+    }
+    
+    if (totalRecords === 0) {
+      console.warn(`⚠️ [RAG] Table ${tableName} is empty`);
+      throw new Error(`Table ${tableName} is empty. Please run ingest-folder.bat first to ingest your PDF files.`);
+    }
+    
     // Check if VECTOR column exists
     const checkVectorResult = await pool.request().query(`
       SELECT COUNT(*) AS HasVector
@@ -950,9 +992,36 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
       AND name = 'Embedding'
     `);
     const hasVectorColumn = checkVectorResult.recordset[0].HasVector > 0;
+    
+    console.log(`📊 [RAG] Vector column check: ${hasVectorColumn ? '✅ exists' : '❌ not found'}`);
+    
+    // Check records with embedding
+    if (hasVectorColumn) {
+      const embeddingCountResult = await pool.request().query(`
+        SELECT COUNT(*) AS Count
+        FROM dbo.[${tableName}]
+        WHERE Embedding IS NOT NULL
+      `);
+      recordsWithEmbedding = embeddingCountResult.recordset[0].Count;
+      console.log(`📊 [RAG] Records with Embedding: ${recordsWithEmbedding}/${totalRecords}`);
+    } else {
+      const vectorJsonCountResult = await pool.request().query(`
+        SELECT COUNT(*) AS Count
+        FROM dbo.[${tableName}]
+        WHERE VectorJson IS NOT NULL
+      `);
+      recordsWithEmbedding = vectorJsonCountResult.recordset[0].Count;
+      console.log(`📊 [RAG] Records with VectorJson: ${recordsWithEmbedding}/${totalRecords}`);
+    }
+    
+    if (recordsWithEmbedding === 0) {
+      throw new Error(`No records with embeddings found in ${tableName}. Please re-ingest the documents.`);
+    }
 
     const vectorString = '[' + queryEmbedding.map(v => v.toString()).join(',') + ']';
     let results = [];
+    
+    console.log(`🔍 [RAG] Starting similarity search with ${recordsWithEmbedding} records...`);
 
     if (hasVectorColumn) {
       // Try VECTOR_DISTANCE first, fallback to JavaScript if it fails
@@ -973,7 +1042,10 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
           ORDER BY VECTOR_DISTANCE(Embedding, CAST('${vectorString}' AS VECTOR(${EMBEDDING_DIMENSION})), 'COSINE') ASC
         `;
         
+        console.log(`🔍 [RAG] Executing VECTOR_DISTANCE query...`);
         const result = await pool.request().query(searchSql);
+        
+        console.log(`📊 [RAG] VECTOR_DISTANCE query returned ${result.recordset.length} results`);
 
         results = result.recordset.map(row => ({
           id: row.ID,
@@ -981,8 +1053,14 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
           fileName: row.FileName || 'unknown',
           pageNumber: (row.PageNumber || 0) + 1,
           chunkIndex: row.ChunkIndex || 0,
-          similarity: row.Similarity,
+          similarity: row.Similarity || 0,
         }));
+        
+        // Log similarity scores
+        if (results.length > 0) {
+          const simScores = results.map(r => r.similarity);
+          console.log(`📊 [RAG] Similarity scores: ${simScores.map(s => s.toFixed(4)).join(', ')}`);
+        }
       } catch (vectorError) {
         // Fallback: VECTOR_DISTANCE not working, use JavaScript calculation
         console.warn('⚠️ VECTOR_DISTANCE failed, falling back to JavaScript calculation:', vectorError.message);
@@ -1101,10 +1179,30 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
       console.log(`📊 Returning top ${results.length} results`);
     }
 
-    console.log(`✅ Found ${results.length} similar chunks`);
+    console.log(`✅ [RAG] Search completed: ${results.length} results`);
+    
+    if (results.length > 0) {
+      console.log(`📊 [RAG] Result summary:`, {
+        count: results.length,
+        files: [...new Set(results.map(r => r.fileName))],
+        similarityRange: `${Math.min(...results.map(r => r.similarity)).toFixed(4)} - ${Math.max(...results.map(r => r.similarity)).toFixed(4)}`
+      });
+    } else {
+      console.warn(`⚠️ [RAG] No results found. Check:`);
+      console.warn(`   - Are there records in ${tableName}?`);
+      console.warn(`   - Do records have embeddings?`);
+      console.warn(`   - Is the query embedding correct?`);
+    }
+    
     return results;
   } catch (error) {
-    console.error('Error searching similar:', error);
+    console.error('❌ [RAG] Error searching similar:', error.message);
+    console.error('   Stack:', error.stack?.substring(0, 500));
+    console.error('   Error details:', {
+      name: error.name,
+      code: error.code,
+      message: error.message
+    });
     throw error;
   }
 }

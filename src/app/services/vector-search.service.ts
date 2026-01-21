@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { HttpClient, HttpParams, HttpErrorResponse } from '@angular/common/http';
+import { Observable, throwError, of } from 'rxjs';
+import { catchError, timeout, retry } from 'rxjs/operators';
 import { environment } from '../../environments/environment';
 
 export interface SearchRequest {
@@ -51,9 +52,37 @@ export class VectorSearchService {
       similarityThreshold
     };
 
+    // Timeout: 10 giây, retry: 1 lần
     return this.http.post<SearchResponse>(
       `${this.apiUrl}/api/search/vector`,
       request
+    ).pipe(
+      timeout(10000), // 10 giây timeout
+      retry(1), // Retry 1 lần nếu fail
+      catchError((error: HttpErrorResponse) => {
+        console.error('Vector search error:', error);
+        
+        // Nếu lỗi, trả về empty response thay vì throw error
+        // Để chat vẫn có thể tiếp tục hoạt động bình thường
+        const emptyResponse: SearchResponse = {
+          query,
+          tableName,
+          totalResults: 0,
+          results: []
+        };
+        
+        // Log warning nhưng không block chat
+        if (error.status === 0) {
+          console.warn('⚠️ Vector search: Không thể kết nối đến backend API. Chat sẽ tiếp tục không có vector search.');
+        } else if (error.status === 500) {
+          console.warn('⚠️ Vector search: Lỗi server (500). Chat sẽ tiếp tục không có vector search.');
+        } else {
+          console.warn(`⚠️ Vector search: Lỗi ${error.status}. Chat sẽ tiếp tục không có vector search.`);
+        }
+        
+        // Trả về empty response để chat có thể tiếp tục
+        return of(emptyResponse);
+      })
     );
   }
 
@@ -63,6 +92,12 @@ export class VectorSearchService {
   checkHealth(): Observable<{ status: string; service: string }> {
     return this.http.get<{ status: string; service: string }>(
       `${this.apiUrl}/api/search/health`
+    ).pipe(
+      timeout(5000), // 5 giây timeout cho health check
+      catchError((error: HttpErrorResponse) => {
+        console.warn('Vector search health check failed:', error);
+        return of({ status: 'unavailable', service: 'vector-search' });
+      })
     );
   }
 }
