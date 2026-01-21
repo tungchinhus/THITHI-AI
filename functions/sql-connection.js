@@ -46,7 +46,11 @@ async function initializeSQLPool(config) {
   const database = config.database || process.env.SQL_SERVER_DATABASE || 'THITHI_AI';
   const port = config.port || parseInt(process.env.SQL_SERVER_PORT || '1433');
   const encrypt = config.encrypt !== false;
-  const trustServerCertificate = config.trustServerCertificate || false;
+  // Default to true for self-signed certificates (common in development)
+  // Set SQL_SERVER_TRUST_CERT=false to disable if needed
+  const trustServerCertificate = config.trustServerCertificate !== undefined 
+    ? config.trustServerCertificate 
+    : (process.env.SQL_SERVER_TRUST_CERT !== 'false');
 
   let sqlConfig;
 
@@ -140,7 +144,7 @@ async function initializeSQLPool(config) {
       port: port,
       options: {
         encrypt: encrypt,
-        trustServerCertificate: trustServerCertificate,
+        trustServerCertificate: trustServerCertificate, // Set to true to accept self-signed certificates
         enableArithAbort: true,
         connectionTimeout: 30000,
         requestTimeout: 30000
@@ -153,6 +157,7 @@ async function initializeSQLPool(config) {
     };
     console.log('🔐 Using SQL Server Authentication');
     console.log(`🔍 DEBUG: Driver type: ${driverType}, User: ${user}, Server: ${server}:${port}, Database: ${database}`);
+    console.log(`🔍 DEBUG: Trust Server Certificate: ${trustServerCertificate}, Encrypt: ${encrypt}`);
     dbg({
       hypothesisId: 'H1',
       location: 'sql-connection.js:initializeSQLPool:sql-auth-config',
@@ -237,14 +242,46 @@ async function initializeSQLPool(config) {
     console.log('✅ SQL Server connection pool initialized');
     return pool;
   } catch (error) {
+    // Better error serialization for msnodesqlv8 errors
+    let errorDetails = {
+      message: error.message || String(error),
+      code: error.code,
+      name: error.name || error.constructor?.name,
+      errno: error.errno,
+      sqlState: error.sqlState,
+      sqlMessage: error.sqlMessage,
+    };
+
+    // Try to extract more details from error object
+    try {
+      if (error.originalError) {
+        errorDetails.originalError = {
+          message: error.originalError.message,
+          code: error.originalError.code,
+          name: error.originalError.name,
+        };
+      }
+      // Check for nested error properties
+      const errorKeys = Object.keys(error);
+      if (errorKeys.length > 0) {
+        errorDetails.allProperties = errorKeys;
+        // Try to get string representation of common error properties
+        for (const key of ['info', 'number', 'state', 'class', 'serverName', 'procName']) {
+          if (error[key] !== undefined) {
+            errorDetails[key] = error[key];
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore errors during error serialization
+    }
+
     // #region agent log
     const errorLog = {
       location: 'sql-connection.js:70',
       message: 'SQL connection failed',
       data: {
-        error: error.message,
-        code: error.code,
-        name: error.name,
+        ...errorDetails,
         server: server,
         port: port,
         authentication: useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication',
@@ -262,30 +299,50 @@ async function initializeSQLPool(config) {
         body: JSON.stringify(errorLog)
       }).catch(() => {});
     } catch (e) {}
-    console.error('🔍 DEBUG: SQL connection error details', {
-      error: error.message,
-      code: error.code,
-      name: error.name,
-      server: server,
-      port: port,
-      authentication: useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication'
-    });
     // #endregion
-    console.error(`❌ DEBUG: Connection failed with driver: ${driverType}`);
-    console.error(`❌ DEBUG: Error details:`, {
-      message: error.message,
-      code: error.code,
-      name: error.name,
-      stack: error.stack?.substring(0, 200),
-    });
+    
+    console.error('🔍 DEBUG: SQL connection error details');
+    console.error('   Error Name:', errorDetails.name || 'Unknown');
+    console.error('   Error Message:', errorDetails.message || 'No message');
+    console.error('   Error Code:', errorDetails.code || 'No code');
+    if (errorDetails.sqlState) console.error('   SQL State:', errorDetails.sqlState);
+    if (errorDetails.sqlMessage) console.error('   SQL Message:', errorDetails.sqlMessage);
+    if (errorDetails.errno) console.error('   Errno:', errorDetails.errno);
+    console.error('   Server:', server);
+    console.error('   Port:', port);
+    console.error('   Database:', database);
+    console.error('   Authentication:', useWindowsAuth ? 'Windows Authentication' : 'SQL Server Authentication');
+    console.error('   Driver:', driverType);
+    
+    if (error.stack) {
+      console.error('\n   Stack Trace:');
+      console.error(error.stack.split('\n').slice(0, 5).map(line => '   ' + line).join('\n'));
+    }
+
+    // Provide troubleshooting tips
+    console.error('\n💡 Troubleshooting Tips:');
+    if (useWindowsAuth) {
+      console.error('   1. Verify SQL Server is running: Get-Service MSSQLSERVER');
+      console.error('   2. Check SQL Server Browser is running: Get-Service SQLBrowser');
+      console.error('   3. Verify Windows Authentication is enabled in SQL Server');
+      console.error('   4. Check if SQL Server allows remote connections');
+      console.error('   5. Try using SQL Server Authentication instead:');
+      console.error('      $env:SQL_SERVER_USER = "sa"');
+      console.error('      $env:SQL_SERVER_PASSWORD = "your-password"');
+    } else {
+      console.error('   1. Verify SQL Server is running: Get-Service MSSQLSERVER');
+      console.error('   2. Check username and password are correct');
+      console.error('   3. Verify SQL Server Authentication is enabled');
+      console.error('   4. Check firewall allows port', port);
+    }
+    console.error('   6. Test connection with: sqlcmd -S', server, '-d', database, useWindowsAuth ? '-E' : '-U ' + (config.user || process.env.SQL_SERVER_USER || 'sa'));
+    
     dbg({
       hypothesisId: 'H1',
       location: 'sql-connection.js:initializeSQLPool:error',
       message: 'Connection error occurred',
       data: {
-        errorMessage: error.message,
-        errorCode: error.code,
-        errorName: error.name,
+        ...errorDetails,
         driverType,
         useWindowsAuth,
         server,
@@ -293,8 +350,15 @@ async function initializeSQLPool(config) {
         port,
       },
     });
-    console.error('❌ Error initializing SQL Server connection:', error);
-    throw error;
+    
+    // Create a more informative error
+    const informativeError = new Error(
+      `SQL Server connection failed: ${errorDetails.message || 'Unknown error'}\n` +
+      `Server: ${server}:${port}, Database: ${database}, Auth: ${useWindowsAuth ? 'Windows' : 'SQL'}, Driver: ${driverType}`
+    );
+    informativeError.originalError = error;
+    informativeError.details = errorDetails;
+    throw informativeError;
   }
 }
 

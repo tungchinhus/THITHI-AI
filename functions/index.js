@@ -1053,10 +1053,16 @@ Hệ thống đã cố gắng tính toán thống kê từ dữ liệu TSMay nh�
                     
                     console.log(`📊 Similarity scores: min=${minSim.toFixed(4)}, max=${maxSim.toFixed(4)}, avg=${avgSim.toFixed(4)}`);
                     
-                    // Filter theo similarity threshold (chỉ lấy similarity > 0.3)
-                    // Giảm threshold để lấy nhiều kết quả hơn
-                    const SIMILARITY_THRESHOLD = 0.25; // Giảm từ 0.3 xuống 0.25 để lấy nhiều hơn
+                    // Filter theo similarity threshold (chỉ lấy similarity > 0.2)
+                    // Giảm threshold để lấy nhiều kết quả hơn, đặc biệt cho các query tiếng Việt
+                    const SIMILARITY_THRESHOLD = 0.2; // Giảm từ 0.25 xuống 0.2 để lấy nhiều hơn cho tiếng Việt
+                    // #region agent log
+                    try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H4',location:'index.js:before-filter',message:'Before similarity filter',data:{ragResultsCount:ragResults.length,threshold:SIMILARITY_THRESHOLD,similarities:ragResults.map(r=>({id:r.id,similarity:r.similarity}))}})})}catch(e){}
+                    // #endregion
                     const filteredResults = ragResults.filter(r => (r.similarity || 0) >= SIMILARITY_THRESHOLD);
+                    // #region agent log
+                    try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H4',location:'index.js:after-filter',message:'After similarity filter',data:{filteredCount:filteredResults.length,originalCount:ragResults.length,threshold:SIMILARITY_THRESHOLD}})})}catch(e){}
+                    // #endregion
                     
                     console.log(`📊 Filtered results (similarity >= ${SIMILARITY_THRESHOLD}): ${filteredResults.length}/${ragResults.length}`);
                     

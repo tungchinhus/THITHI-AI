@@ -22,6 +22,34 @@ const CHUNK_SIZE = 1000;
 const CHUNK_OVERLAP = 100;
 const EMBEDDING_DIMENSION = 768; // Gemini text-embedding-004 produces 768-dimensional vectors
 
+/**
+ * Normalize và cải thiện query để tăng khả năng tìm thấy kết quả
+ * @param {string} query - Query gốc
+ * @returns {string} - Query đã được normalize
+ */
+function normalizeQuery(query) {
+  if (!query || typeof query !== 'string') {
+    return '';
+  }
+  
+  // Loại bỏ khoảng trắng thừa
+  let normalized = query.trim().replace(/\s+/g, ' ');
+  
+  // Loại bỏ dấu câu không cần thiết ở đầu/cuối (nhưng giữ lại trong câu)
+  normalized = normalized.replace(/^[.,;:!?]+|[.,;:!?]+$/g, '').trim();
+  
+  // Nếu query quá ngắn (< 3 ký tự), không normalize nhiều
+  if (normalized.length < 3) {
+    return normalized;
+  }
+  
+  // Đảm bảo query có đủ context cho embedding
+  // Nếu query quá ngắn, có thể thêm context
+  // Nhưng không thay đổi quá nhiều để tránh làm lệch ý nghĩa
+  
+  return normalized;
+}
+
 // Initialize Google Vision API client
 let visionClient = null;
 function getVisionClient() {
@@ -927,20 +955,27 @@ async function ingestFolder(folderPath, apiKey, tableName = 'rag_documents') {
  * @param {number} topK - Number of results
  * @returns {Promise<Array<{content: string, fileName: string, pageNumber: number, similarity: number}>>}
  */
-async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 4) {
+async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 15) {
   try {
+    // #region agent log
+    try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H1,H2,H3,H4,H5,H6',location:'rag-service.js:searchSimilar:entry',message:'Starting searchSimilar',data:{query:query.substring(0,100),tableName,topK,hasApiKey:!!apiKey}})})}catch(e){}
+    // #endregion
+    // Normalize query để cải thiện kết quả tìm kiếm
+    const normalizedQuery = normalizeQuery(query);
+    
     console.log(`🔍 [RAG] Starting searchSimilar:`, {
-      query: query.substring(0, 100),
+      originalQuery: query.substring(0, 100),
+      normalizedQuery: normalizedQuery.substring(0, 100),
       tableName,
       topK,
       hasApiKey: !!apiKey
     });
     
-    // Generate embedding for query
+    // Generate embedding for normalized query
     console.log(`🔍 [RAG] Generating embedding for query...`);
     let queryEmbedding;
     try {
-      queryEmbedding = await generateEmbedding(query, apiKey);
+      queryEmbedding = await generateEmbedding(normalizedQuery, apiKey);
     } catch (embedError) {
       console.error('❌ [RAG] Embedding generation failed:', embedError.message);
       throw new Error(`Failed to generate query embedding: ${embedError.message}`);
@@ -952,6 +987,9 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
     }
     
     console.log(`✅ [RAG] Embedding generated: ${queryEmbedding.length} dimensions`);
+    // #region agent log
+    try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H1,H2',location:'rag-service.js:searchSimilar:query-embedding',message:'Query embedding generated',data:{queryEmbeddingLength:queryEmbedding.length,queryEmbeddingPreview:queryEmbedding.slice(0,5)}})})}catch(e){}
+    // #endregion
 
     const pool = getSQLPool();
     if (!pool) {
@@ -984,16 +1022,24 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
       throw new Error(`Table ${tableName} is empty. Please run ingest-folder.bat first to ingest your PDF files.`);
     }
     
-    // Check if VECTOR column exists
+    // Check Embedding column and its data type (must be VECTOR to use VECTOR_DISTANCE)
     const checkVectorResult = await pool.request().query(`
-      SELECT COUNT(*) AS HasVector
-      FROM sys.columns
-      WHERE object_id = OBJECT_ID('dbo.[${tableName}]')
-      AND name = 'Embedding'
+      SELECT 
+        COUNT(*) AS HasEmbeddingColumn,
+        MAX(t.name) AS DataType
+      FROM sys.columns c
+      JOIN sys.types t ON c.user_type_id = t.user_type_id
+      WHERE c.object_id = OBJECT_ID('dbo.[${tableName}]')
+        AND c.name = 'Embedding'
     `);
-    const hasVectorColumn = checkVectorResult.recordset[0].HasVector > 0;
+    const hasEmbeddingColumn = checkVectorResult.recordset[0].HasEmbeddingColumn > 0;
+    const embeddingDataType = (checkVectorResult.recordset[0].DataType || '').toLowerCase();
+    const hasVectorColumn = hasEmbeddingColumn && embeddingDataType === 'vector';
     
-    console.log(`📊 [RAG] Vector column check: ${hasVectorColumn ? '✅ exists' : '❌ not found'}`);
+    console.log(`📊 [RAG] Vector column check: ${hasVectorColumn ? '✅ vector' : hasEmbeddingColumn ? `❌ type=${embeddingDataType}` : '❌ not found'}`);
+    // #region agent log
+    try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H1,H3,H6',location:'rag-service.js:searchSimilar:vector-column-check',message:'Vector column check',data:{hasEmbeddingColumn,embeddingDataType,hasVectorColumn,totalRecords}})})}catch(e){}
+    // #endregion
     
     // Check records with embedding
     if (hasVectorColumn) {
@@ -1004,6 +1050,9 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
       `);
       recordsWithEmbedding = embeddingCountResult.recordset[0].Count;
       console.log(`📊 [RAG] Records with Embedding: ${recordsWithEmbedding}/${totalRecords}`);
+      // #region agent log
+      try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H6',location:'rag-service.js:searchSimilar:embedding-count',message:'Records with Embedding',data:{recordsWithEmbedding,totalRecords,hasVectorColumn:true}})})}catch(e){}
+      // #endregion
     } else {
       const vectorJsonCountResult = await pool.request().query(`
         SELECT COUNT(*) AS Count
@@ -1012,6 +1061,9 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
       `);
       recordsWithEmbedding = vectorJsonCountResult.recordset[0].Count;
       console.log(`📊 [RAG] Records with VectorJson: ${recordsWithEmbedding}/${totalRecords}`);
+      // #region agent log
+      try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H6',location:'rag-service.js:searchSimilar:vectorjson-count',message:'Records with VectorJson',data:{recordsWithEmbedding,totalRecords,hasVectorColumn:false}})})}catch(e){}
+      // #endregion
     }
     
     if (recordsWithEmbedding === 0) {
@@ -1020,6 +1072,51 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
 
     const vectorString = '[' + queryEmbedding.map(v => v.toString()).join(',') + ']';
     let results = [];
+
+    // Helper: sort, trim topK, log stats, warn threshold
+    const finalizeResults = (items) => {
+      if (!items || items.length === 0) return [];
+      const sorted = [...items].sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+      const trimmed = sorted.slice(0, topK);
+      const sims = trimmed.map(r => r.similarity || 0);
+      const maxSim = Math.max(...sims);
+      const minSim = Math.min(...sims);
+      const avgSim = sims.reduce((a, b) => a + b, 0) / sims.length;
+      const threshold = 0.2;
+      const above = sims.filter(s => s >= threshold).length;
+      console.log(`📊 [RAG] Rerank top ${trimmed.length}/${sorted.length} | sim min/avg/max: ${minSim.toFixed(4)} / ${avgSim.toFixed(4)} / ${maxSim.toFixed(4)} | >=${threshold}: ${above}`);
+      if (above === 0) {
+        console.warn(`⚠️ [RAG] Không có kết quả vượt ngưỡng ${threshold}. Cân nhắc mở rộng topK hoặc hạ ngưỡng.`);
+      }
+      return trimmed;
+    };
+
+    // Detect actual column names (case-sensitive) and create aliases
+    let chunkColumn = 'ChunkIndex';
+    let fileNameColumn = 'file_path'; // default to file_path column in DB
+    let pageNumberColumn = null; // may not exist as a column
+    let contentColumn = 'Content';
+    let metadataColumn = 'metadata';
+    let vectorJsonColumn = null;
+    let embeddingColumn = 'Embedding';
+    try {
+      const colCheck = await pool.request().query(`
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = '${tableName}'
+      `);
+      const cols = colCheck.recordset.map(r => r.COLUMN_NAME);
+      const findCol = (name) => cols.find(c => c.toLowerCase() === name.toLowerCase());
+      chunkColumn = findCol('chunk_index') || findCol('ChunkIndex') || chunkColumn;
+      fileNameColumn = findCol('file_path') || findCol('file_name') || findCol('filename') || fileNameColumn;
+      pageNumberColumn = findCol('page_number') || findCol('pagenumber') || null;
+      contentColumn = findCol('content') || contentColumn;
+      metadataColumn = findCol('metadata') || metadataColumn;
+      vectorJsonColumn = findCol('vectorjson') || findCol('VectorJson') || null;
+      embeddingColumn = findCol('embedding') || findCol('Embedding') || embeddingColumn;
+      console.log(`📋 [RAG] Columns used -> content: ${contentColumn}, file: ${fileNameColumn || 'N/A'}, page: ${pageNumberColumn || 'N/A (using metadata.page if available)'}, chunk: ${chunkColumn}, vectorJson: ${vectorJsonColumn || 'N/A'}, embedding: ${embeddingColumn}`);
+    } catch (e) {
+      console.log(`⚠️ [RAG] Could not detect columns, using defaults. ${e.message}`);
+    }
     
     console.log(`🔍 [RAG] Starting similarity search with ${recordsWithEmbedding} records...`);
 
@@ -1032,10 +1129,11 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
         const searchSql = `
           SELECT TOP (${topK})
             ID,
-            Content,
-            FileName,
-            PageNumber,
-            ChunkIndex,
+            [${contentColumn}] AS Content,
+            ${fileNameColumn ? `[${fileNameColumn}] AS FileName,` : `NULL AS FileName,`}
+            ${pageNumberColumn ? `[${pageNumberColumn}] AS PageNumber,` : `0 AS PageNumber,`}
+            [${chunkColumn}] AS ChunkIndex,
+            ${metadataColumn ? `[${metadataColumn}] AS Metadata,` : `NULL AS Metadata,`}
             (1.0 - VECTOR_DISTANCE(Embedding, CAST('${vectorString}' AS VECTOR(${EMBEDDING_DIMENSION})), 'COSINE')) AS Similarity
           FROM dbo.[${tableName}]
           WHERE Embedding IS NOT NULL
@@ -1043,27 +1141,45 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
         `;
         
         console.log(`🔍 [RAG] Executing VECTOR_DISTANCE query...`);
+        // #region agent log
+        try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H1,H3',location:'rag-service.js:searchSimilar:before-vector-query',message:'Before VECTOR_DISTANCE query',data:{queryEmbeddingLength:queryEmbedding.length,embeddingDimension:EMBEDDING_DIMENSION,vectorStringLength:vectorString.length}})})}catch(e){}
+        // #endregion
         const result = await pool.request().query(searchSql);
         
         console.log(`📊 [RAG] VECTOR_DISTANCE query returned ${result.recordset.length} results`);
+        // #region agent log
+        try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H3,H4',location:'rag-service.js:searchSimilar:after-vector-query',message:'VECTOR_DISTANCE query results',data:{resultCount:result.recordset.length,similarities:result.recordset.slice(0,5).map(r=>({id:r.ID,similarity:r.Similarity}))}})})}catch(e){}
+        // #endregion
 
-        results = result.recordset.map(row => ({
-          id: row.ID,
-          content: row.Content,
-          fileName: row.FileName || 'unknown',
-          pageNumber: (row.PageNumber || 0) + 1,
-          chunkIndex: row.ChunkIndex || 0,
-          similarity: row.Similarity || 0,
-        }));
-        
-        // Log similarity scores
-        if (results.length > 0) {
-          const simScores = results.map(r => r.similarity);
-          console.log(`📊 [RAG] Similarity scores: ${simScores.map(s => s.toFixed(4)).join(', ')}`);
-        }
+        const vectorResults = result.recordset.map(row => {
+          let pageNum = row.PageNumber || 0;
+          if (!pageNum && row.Metadata) {
+            try {
+              const meta = JSON.parse(row.Metadata);
+              if (meta && meta.page !== undefined) {
+                pageNum = Number(meta.page) || 0;
+              }
+            } catch (_) {}
+          }
+          return {
+            id: row.ID,
+            content: row.Content,
+            fileName: row.FileName || 'unknown',
+            pageNumber: pageNum + 1,
+            chunkIndex: row.ChunkIndex || 0,
+            similarity: row.Similarity || 0,
+          };
+        });
+        results = finalizeResults(vectorResults);
+        // #region agent log
+        try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H4',location:'rag-service.js:searchSimilar:finalized-results',message:'Results finalized',data:{resultsCount:results.length,similarities:results.map(r=>({id:r.id,similarity:r.similarity}))}})})}catch(e){}
+        // #endregion
       } catch (vectorError) {
         // Fallback: VECTOR_DISTANCE not working, use JavaScript calculation
         console.warn('⚠️ VECTOR_DISTANCE failed, falling back to JavaScript calculation:', vectorError.message);
+        // #region agent log
+        try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H1,H3',location:'rag-service.js:searchSimilar:vector-error',message:'VECTOR_DISTANCE query failed',data:{errorMessage:vectorError.message,errorStack:vectorError.stack?.substring(0,200)}})})}catch(e){}
+        // #endregion
         console.log('📊 Using VectorJson for similarity calculation...');
         
         // Check total records first
@@ -1079,12 +1195,39 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
         }
 
         const allResult = await pool.request().query(`
-          SELECT ID, Content, VectorJson, FileName, PageNumber, ChunkIndex
+          SELECT TOP (${Math.max(topK * 4, 40)}) 
+            ID, 
+            [${contentColumn}] AS Content, 
+            ${vectorJsonColumn ? `[${vectorJsonColumn}] AS VectorJson,` : ''} 
+            ${vectorJsonColumn ? '' : `[${embeddingColumn}] AS Embedding,`} 
+            ${fileNameColumn ? `[${fileNameColumn}] AS FileName,` : `NULL AS FileName,`} 
+            ${pageNumberColumn ? `[${pageNumberColumn}] AS PageNumber,` : `0 AS PageNumber,`} 
+            [${chunkColumn}] AS ChunkIndex, 
+            ${metadataColumn ? `[${metadataColumn}] AS Metadata` : `NULL AS Metadata`}
           FROM dbo.[${tableName}]
-          WHERE VectorJson IS NOT NULL
+          ${vectorJsonColumn ? 'WHERE ' + `[${vectorJsonColumn}] IS NOT NULL` : 'WHERE ' + `[${embeddingColumn}] IS NOT NULL`}
         `);
 
         console.log(`📊 Found ${allResult.recordset.length} records with VectorJson`);
+        // #region agent log
+        try{
+          let sampleVectorLength = null;
+          if (allResult.recordset.length > 0) {
+            const firstRow = allResult.recordset[0];
+            if (firstRow.VectorJson) {
+              try {
+                const sampleVector = JSON.parse(firstRow.VectorJson);
+                sampleVectorLength = sampleVector.length;
+              } catch(e) {}
+            } else if (firstRow.Embedding) {
+              if (Array.isArray(firstRow.Embedding)) {
+                sampleVectorLength = firstRow.Embedding.length;
+              }
+            }
+          }
+          fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H1,H2',location:'rag-service.js:searchSimilar:stored-vector-check',message:'Stored vector dimension check',data:{recordsFound:allResult.recordset.length,sampleVectorLength,queryEmbeddingLength:queryEmbedding.length}})}).catch(()=>{});
+        }catch(e){}
+        // #endregion
         
         if (allResult.recordset.length === 0) {
           throw new Error('No records with VectorJson found. The data may have been ingested without VectorJson. Please re-ingest the folder.');
@@ -1093,13 +1236,46 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
         const similarities = [];
         for (const row of allResult.recordset) {
           try {
-            const vector = JSON.parse(row.VectorJson);
+            let vector = null;
+            if (row.VectorJson) {
+              vector = JSON.parse(row.VectorJson);
+            } else if (row.Embedding) {
+              if (Array.isArray(row.Embedding)) {
+                vector = row.Embedding;
+              } else if (typeof row.Embedding === 'string') {
+                try { vector = JSON.parse(row.Embedding); } catch (_) {}
+                if (!vector) {
+                  vector = row.Embedding.replace(/[\[\]]/g, '').split(',').map(Number).filter(n => !Number.isNaN(n));
+                }
+              } else if (Buffer.isBuffer(row.Embedding)) {
+                const s = row.Embedding.toString('utf8');
+                vector = s.replace(/[\[\]]/g, '').split(',').map(Number).filter(n => !Number.isNaN(n));
+              }
+            }
+            if (!vector || vector.length === 0) {
+              console.warn(`⚠️ Empty vector for ID ${row.ID}, skipping`);
+              continue;
+            }
+            // #region agent log
+            try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H1,H2',location:'rag-service.js:searchSimilar:before-similarity',message:'Before similarity calculation',data:{rowId:row.ID,queryEmbeddingLength:queryEmbedding.length,vectorLength:vector.length}})})}catch(e){}
+            // #endregion
             const similarity = cosineSimilarity(queryEmbedding, vector);
             similarities.push({
               id: row.ID,
               content: row.Content,
               fileName: row.FileName || 'unknown',
-              pageNumber: (row.PageNumber || 0) + 1,
+              pageNumber: (() => {
+                let pn = row.PageNumber || 0;
+                if (!pn && row.Metadata) {
+                  try {
+                    const meta = JSON.parse(row.Metadata);
+                    if (meta && meta.page !== undefined) {
+                      pn = Number(meta.page) || 0;
+                    }
+                  } catch (_) {}
+                }
+                return pn + 1;
+              })(),
               chunkIndex: row.ChunkIndex || 0,
               similarity: similarity,
             });
@@ -1115,11 +1291,7 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
           console.log(`📊 Similarity range: ${minSim.toFixed(4)} - ${maxSim.toFixed(4)}`);
         }
 
-        // Sort by similarity and take top K
-        similarities.sort((a, b) => b.similarity - a.similarity);
-        results = similarities.slice(0, topK);
-        
-        console.log(`📊 Returning top ${results.length} results`);
+        results = finalizeResults(similarities);
       }
     } else {
       // Fallback: Calculate cosine similarity in JavaScript
@@ -1136,7 +1308,7 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
       }
 
       const allResult = await pool.request().query(`
-        SELECT ID, Content, VectorJson, FileName, PageNumber, ChunkIndex
+        SELECT TOP (${Math.max(topK * 4, 40)}) ID, Content, VectorJson, FileName, PageNumber, ChunkIndex
         FROM dbo.[${tableName}]
         WHERE VectorJson IS NOT NULL
       `);
@@ -1173,13 +1345,13 @@ async function searchSimilar(query, apiKey, tableName = 'rag_documents', topK = 
       }
 
       // Sort and take top K
-      similarities.sort((a, b) => b.similarity - a.similarity);
-      results = similarities.slice(0, topK);
-      
-      console.log(`📊 Returning top ${results.length} results`);
+      results = finalizeResults(similarities);
     }
 
     console.log(`✅ [RAG] Search completed: ${results.length} results`);
+    // #region agent log
+    try{fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',timestamp:Date.now(),hypothesisId:'H4',location:'rag-service.js:searchSimilar:final-results',message:'Final search results',data:{resultsCount:results.length,similarities:results.map(r=>({id:r.id,similarity:r.similarity,fileName:r.fileName})),minSimilarity:results.length>0?Math.min(...results.map(r=>r.similarity)):0,maxSimilarity:results.length>0?Math.max(...results.map(r=>r.similarity)):0}})})}catch(e){}
+    // #endregion
     
     if (results.length > 0) {
       console.log(`📊 [RAG] Result summary:`, {

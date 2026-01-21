@@ -9,6 +9,7 @@ public class VectorSearchService
     private readonly string _connectionString;
     private readonly HttpClient _httpClient;
     private readonly string _pythonApiUrl;
+    private readonly int _embeddingDimension;
     private readonly ILogger<VectorSearchService> _logger;
 
     public VectorSearchService(
@@ -19,8 +20,12 @@ public class VectorSearchService
         _connectionString = config.GetConnectionString("DefaultConnection") 
             ?? throw new ArgumentNullException(nameof(config), "DefaultConnection string is required");
         _httpClient = httpClient;
+        // Python API chạy port riêng (tránh trùng với Kestrel). Mặc định 5005.
         _pythonApiUrl = config["PythonApi:VectorizeUrl"] ?? "http://localhost:5005/vectorize";
+        // Embedding dimension: 768 for all-mpnet-base-v2, 384 for paraphrase-multilingual-MiniLM-L12-v2
+        _embeddingDimension = config.GetValue<int>("Embedding:Dimension", 768);
         _logger = logger;
+        _logger.LogInformation("VectorSearchService initialized with embedding dimension: {Dimension}", _embeddingDimension);
     }
 
     /// <summary>
@@ -57,6 +62,16 @@ public class VectorSearchService
             _logger.LogWarning("Không thể vectorize query");
             return new List<SearchResult>();
         }
+        
+        _logger.LogInformation("Query vector generated: {Count} dimensions (expected: {Expected})", 
+            queryVector.Count, _embeddingDimension);
+        
+        if (queryVector.Count != _embeddingDimension)
+        {
+            _logger.LogWarning("Dimension mismatch! Query vector has {Actual} dimensions but expected {Expected}. " +
+                "This may cause search failures. Check Python API model configuration.",
+                queryVector.Count, _embeddingDimension);
+        }
 
         // Bước 2: Kiểm tra xem có hỗ trợ VECTOR type (SQL Server 2025+) không
         bool useNativeVector = await CheckVectorSupportAsync(tableName);
@@ -75,8 +90,19 @@ public class VectorSearchService
 
             // Bước 3: Tính cosine similarity và sắp xếp
             var results = new List<SearchResult>();
+            int dimensionMismatches = 0;
             foreach (var item in allVectors)
             {
+                if (item.Vector.Count != queryVector.Count)
+                {
+                    dimensionMismatches++;
+                    if (dimensionMismatches <= 5) // Log first 5 mismatches
+                    {
+                        _logger.LogWarning("Dimension mismatch for ID {Id}: stored={Stored}, query={Query}", 
+                            item.Id, item.Vector.Count, queryVector.Count);
+                    }
+                    continue; // Skip vectors with mismatched dimensions
+                }
                 var similarity = CalculateCosineSimilarity(queryVector, item.Vector);
                 if (similarity >= similarityThreshold)
                 {
@@ -87,6 +113,14 @@ public class VectorSearchService
                         Id = item.Id
                     });
                 }
+            }
+            
+            if (dimensionMismatches > 0)
+            {
+                _logger.LogWarning("Found {Count} vectors with dimension mismatch. " +
+                    "Stored vectors may have been created with a different model. " +
+                    "Consider re-ingesting data with the current model (dimension {Expected}).",
+                    dimensionMismatches, _embeddingDimension);
             }
 
             // Sắp xếp theo similarity giảm dần và lấy topN
@@ -153,15 +187,18 @@ public class VectorSearchService
 
         // Use native VECTOR_DISTANCE function
         // VECTOR_DISTANCE returns distance (0 = identical), so similarity = 1 - distance
+        // Note: Dimension must match the stored embeddings (768 for all-mpnet-base-v2)
         string sql = $@"
             SELECT TOP (@topN)
                 ID,
                 Content,
-                (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR(384)), COSINE)) AS Similarity
+                (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})), COSINE)) AS Similarity
             FROM dbo.[{safeTableName}]
             WHERE Embedding IS NOT NULL
-              AND (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR(384)), COSINE)) >= @threshold
-            ORDER BY VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR(384)), COSINE) ASC";
+              AND (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})), COSINE)) >= @threshold
+            ORDER BY VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})), COSINE) ASC";
+        
+        _logger.LogInformation("Using VECTOR({Dimension}) for search", _embeddingDimension);
 
         var results = new List<SearchResult>();
         using var cmd = new SqlCommand(sql, conn);
