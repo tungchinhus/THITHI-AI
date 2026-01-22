@@ -52,7 +52,7 @@ ingest-folder.bat
 cd C:\MyData\projects\THITHI\THIHI_AI\functions
 
 REM Set environment variables
-set GEMINI_API_KEY=AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE
+set GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
 set SQL_SERVER_HOST=localhost
 set SQL_SERVER_DATABASE=THITHI_AI
 set SQL_SERVER_USER=sa
@@ -202,10 +202,10 @@ Trước khi chat:
 **Giải pháp:**
 ```cmd
 REM CMD
-set GEMINI_API_KEY=AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE
+set GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
 
 REM PowerShell
-$env:GEMINI_API_KEY="AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE"
+$env:GEMINI_API_KEY="YOUR_GEMINI_API_KEY_HERE"
 ```
 
 ### Lỗi: "SQL Server connection failed"

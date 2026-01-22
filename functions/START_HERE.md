@@ -6,7 +6,7 @@
 
 **Option 1: Set trong Terminal (Nhanh nhất)**
 ```batch
-set GEMINI_API_KEY=AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE
+set GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
 ```
 
 **Option 2: Set vào Firebase (Một lần)**
@@ -25,7 +25,7 @@ ingest-folder.bat
 ```batch
 REM 1. Set GEMINI_API_KEY (chọn 1 trong 2)
 REM Option A: Set trong terminal
-set GEMINI_API_KEY=AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE
+set GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
 
 REM Option B: Set vào Firebase
 set-gemini-key.bat

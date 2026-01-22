@@ -133,6 +133,38 @@ playwright/.cache/
 **/thithi-*.json
 **/*-*-*-*.json
 
+# Files chứa hardcoded API keys (các file .bat, .ps1 với API keys thực tế)
+# ⚠️ QUAN TRỌNG: Các file này có thể chứa API keys nhạy cảm
+# Ignore các file có thể chứa keys thực tế, nhưng cho phép file example
+functions/ingest-*.bat
+functions/test-*.bat
+functions/chat-*.bat
+functions/set-*.bat
+functions/check-*.bat
+functions/diagnose-*.bat
+functions/get-*.bat
+functions/setup-*.bat
+functions/*.ps1
+!functions/*.bat.example
+!functions/*.ps1.example
+
+# Environment files với API keys thực tế
+# ⚠️ Lưu ý: Firebase config keys có thể public (bảo vệ bởi Security Rules)
+# Nhưng để an toàn, không commit file environment.ts nếu có keys thực tế
+src/environments/environment.ts
+src/environments/environment.prod.ts
+!src/environments/environment.example.ts
+!src/environments/environment.prod.example.ts
+
+# Test files có thể chứa API keys
+**/test-*.bat
+**/test-*.ps1
+**/check-*.js
+**/test_*.py
+
+# Documentation với API keys thực tế (chỉ ignore nếu có keys thực)
+# Các file .md có thể chứa example keys, nên review trước khi commit
+
 # User-specific files
 *.rsuser
 *.suo.user

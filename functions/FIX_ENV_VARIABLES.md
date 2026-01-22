@@ -33,7 +33,7 @@ Chạy script PowerShell:
 ### Cách 3: Set biến trong PowerShell rồi chạy Node
 
 ```powershell
-$env:GEMINI_API_KEY="AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE"
+$env:GEMINI_API_KEY="YOUR_GEMINI_API_KEY_HERE"
 $env:SQL_SERVER_HOST="localhost"
 $env:SQL_SERVER_DATABASE="THITHI_AI"
 $env:SQL_SERVER_USER="sa"

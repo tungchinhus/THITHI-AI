@@ -27,7 +27,7 @@ Script này sẽ set ngay mà không kiểm tra (nhanh hơn).
 ### Cách 3: Set thủ công
 
 ```batch
-echo AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE | firebase functions:secrets:set GEMINI_API_KEY
+echo YOUR_GEMINI_API_KEY_HERE | firebase functions:secrets:set GEMINI_API_KEY
 ```
 
 ## ✅ Sau khi set
@@ -56,7 +56,7 @@ Nếu hiển thị API key → ✅ Đã set thành công!
 
 ## 📝 Lưu ý
 
-- **API Key:** `AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE` đã được hardcode trong script
+- **API Key:** Lấy từ https://aistudio.google.com/app/apikey và thay thế `YOUR_GEMINI_API_KEY_HERE`
 - **Firebase:** Phải login Firebase trước khi set
 - **Quyền:** Phải có quyền truy cập Firebase project
 

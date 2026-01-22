@@ -186,7 +186,7 @@ git push origin --force --tags
 # Tạo script để thay thế API key
 git filter-branch --force --tree-filter \
   "if [ -f check-api-key.js ]; then \
-    sed -i 's/AIzaSyCfLo3bdWBYjPB8XKcYMh62DFKqsmZrIMc/REMOVED_API_KEY/g' check-api-key.js; \
+    sed -i 's/YOUR_API_KEY_HERE/REMOVED_API_KEY/g' check-api-key.js; \
   fi" \
   --prune-empty --tag-name-filter cat -- --all
 ```

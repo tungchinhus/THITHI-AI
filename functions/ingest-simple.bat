@@ -7,7 +7,14 @@ set SQL_SERVER_HOST=localhost
 set SQL_SERVER_DATABASE=THITHI_AI
 set SQL_SERVER_USER=sa
 set SQL_SERVER_PASSWORD=123456
-set GEMINI_API_KEY=AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE
+REM ⚠️ BẢO MẬT: Không hardcode API key ở đây!
+REM Sử dụng environment variable hoặc Firebase Secrets
+if "%GEMINI_API_KEY%"=="" (
+    echo ⚠️  GEMINI_API_KEY chưa được set
+    echo 💡 Set environment variable: set GEMINI_API_KEY=your_key_here
+    echo    Hoặc sử dụng Firebase Secrets: firebase functions:secrets:access GEMINI_API_KEY
+    exit /b 1
+)
 
 echo ============================================
 echo   RAG Folder Ingest (Simple Version)

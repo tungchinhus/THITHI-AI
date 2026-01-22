@@ -42,8 +42,24 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo.
 
-REM Set GEMINI_API_KEY
-set GEMINI_API_KEY=AIzaSyCphpZiqdnBaep9B-cC453Tc19a9hWq-cE
+REM ⚠️ BẢO MẬT: Không hardcode API key ở đây!
+REM Lấy từ environment variable hoặc nhập thủ công
+if "%GEMINI_API_KEY%"=="" (
+    echo.
+    echo ⚠️  GEMINI_API_KEY chưa được set trong environment
+    echo.
+    echo 💡 Cách 1: Set environment variable trước:
+    echo    set GEMINI_API_KEY=your_api_key_here
+    echo.
+    echo 💡 Cách 2: Nhập API key bây giờ:
+    set /p GEMINI_API_KEY="Nhập GEMINI_API_KEY: "
+    echo.
+    if "%GEMINI_API_KEY%"=="" (
+        echo ❌ GEMINI_API_KEY không được để trống
+        pause
+        exit /b 1
+    )
+)
 
 echo 🔑 Đang set GEMINI_API_KEY vào Firebase Secrets...
 echo %GEMINI_API_KEY% | firebase functions:secrets:set GEMINI_API_KEY
