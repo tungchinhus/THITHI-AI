@@ -54,9 +54,6 @@ export class VectorSearchService {
       similarityThreshold
     };
     const fullUrl = `${this.apiUrl}/api/search/vector`;
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vector-search.service.ts:search',message:'Vector search request',data:{apiUrl:this.apiUrl,fullUrl,query,tableName},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-    // #endregion
 
     // Timeout: 10 giây, retry: 1 lần
     return this.http.post<SearchResponse>(
@@ -67,9 +64,6 @@ export class VectorSearchService {
       retry(1), // Retry 1 lần nếu fail
         catchError((error: HttpErrorResponse) => {
         console.error('Vector search error:', error);
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vector-search.service.ts:catchError',message:'Vector search error response',data:{status:error.status,statusText:error.statusText,url:error.url,ok:error.ok},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-        // #endregion
         const isConnectionRefused = error.status === 0;
         const emptyResponse: SearchResponse = {
           query,
@@ -80,7 +74,7 @@ export class VectorSearchService {
         };
         
         if (isConnectionRefused) {
-          console.warn('⚠️ Vector search: Không thể kết nối đến Python API (' + this.apiUrl + '). Khởi động: cd THITHI_python-api && python app.py');
+          console.warn('⚠️ Vector search: Không thể kết nối đến dịch vụ tìm kiếm (' + this.apiUrl + '). Khởi động .NET Backend: cd backend\\THIHI_AI.Backend && dotnet run');
         } else if (error.status === 500) {
           console.warn('⚠️ Vector search: Lỗi server (500). Chat sẽ tiếp tục không có vector search.');
         } else {

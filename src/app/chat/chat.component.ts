@@ -434,7 +434,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
       // Lưu tối đa 100 messages gần nhất để AI nhớ sâu hơn (tăng từ 50 lên 100)
       const messagesToSave = uniqueMessages.slice(-100);
       localStorage.setItem('thihi_chat_history', JSON.stringify(messagesToSave));
-      console.log('✅ Saved chat history to localStorage:', messagesToSave.length, 'messages (not displayed on UI)');
     } catch (error) {
       console.error('Error saving chat history:', error);
       // Nếu localStorage đầy, xóa một số messages cũ
@@ -567,16 +566,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
           : undefined
       }));
 
-      console.log('📤 Sending chat history:', history.length, 'messages');
-      console.log('   - From UI (current session):', uiMessages.filter(m => m.role === 'user' || m.role === 'assistant').length);
-      console.log('   - From localStorage (previous sessions):', savedHistory.length);
-      if (history.length > 0) {
-        console.log('📤 History preview:', history.slice(-5).map(m => ({ 
-          role: m.role, 
-          content: m.content.substring(0, 40) + '...' 
-        })));
-      }
-
       return history;
     } catch (error) {
       console.error('❌ Error getting chat history for API:', error);
@@ -599,7 +588,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
       // Listen to auth state changes
       onAuthStateChanged(auth, (user) => {
-        console.log('Auth state changed:', user ? 'User logged in' : 'User logged out');
         this.user = user;
       }, (error) => {
         console.error('Auth state change error:', error);
@@ -1055,7 +1043,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
     // Track if this message was sent via voice (before resetting the flag)
     const wasVoiceMessage = this.lastMessageWasVoice;
-    console.log('sendMessage called - wasVoiceMessage:', wasVoiceMessage, 'message:', message.substring(0, 50));
     
     // Reset voice flag after capturing it
     this.lastMessageWasVoice = false;
@@ -1100,10 +1087,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
     let vectorSearchResults: SearchResult[] = [];
     
     if (isDataQuery) {
-      console.log('🔍 Detected data query, performing vector search...');
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:sendMessage',message:'Data query branch',data:{finalMessage:finalMessage.substring(0,80),isDataQuery:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion
       // Perform vector search first
       // For count queries, use higher topN to get all matches
       const isCountQuery = finalMessage.toLowerCase().includes('có bao nhiêu') || 
@@ -1112,12 +1095,8 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
       const topN = isCountQuery ? 1000 : 5;
       this.vectorSearchService.search(finalMessage, 'TSMay', topN, 0.3).subscribe({
         next: (searchResponse) => {
-          // #region agent log
-          fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:searchResponse',message:'Vector search response received',data:{resultsCount:searchResponse.results?.length??0,connectionError:!!(searchResponse as any).connectionError},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-          // #endregion
           if (searchResponse.results && searchResponse.results.length > 0) {
             vectorSearchResults = searchResponse.results;
-            console.log(`✅ Found ${searchResponse.results.length} results from vector search`);
             
             // Enhance message with search results for AI context
             const searchContext = this.formatSearchResultsForAI(searchResponse.results);
@@ -1133,13 +1112,11 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
             // Continue with enhanced message (use finalMessage which may have inferred context)
             this.sendMessageWithContext(enhancedMessage, validToken, chatHistory, userInfo, vectorSearchResults, false);
           } else {
-            console.log('⚠️ No results from vector search, proceeding with original message');
             const connectionError = !!(searchResponse as any).connectionError;
             this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, [], connectionError);
           }
         },
         error: (error) => {
-          console.warn('⚠️ Vector search failed, continuing without vector search:', error);
           this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, [], true);
         }
       });
@@ -1152,7 +1129,7 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
   /**
    * Send message with vector search context
-   * @param vectorSearchConnectionError true khi không kết nối được Python API
+   * @param vectorSearchConnectionError true khi không kết nối được dịch vụ vector search (.NET Backend)
    */
   private sendMessageWithContext(
     message: string,
@@ -1169,11 +1146,11 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
         let aiContent = response.answer || response.content || response.message || 'Không có phản hồi';
         
         if (vectorSearchConnectionError) {
-          aiContent += '\n\n---\n\n**⚠️ Lưu ý:** Không kết nối được dịch vụ tìm kiếm dữ liệu (Python API). Để AI có thể tìm trong DB (TBKT, LSX, SBB...), vui lòng khởi động Python API: `cd THITHI_python-api && python app.py` (port theo .env PORT hoặc mặc định 5005).';
+          aiContent += '\n\n---\n\n**⚠️ Lưu ý:** Không kết nối được dịch vụ tìm kiếm dữ liệu (.NET Backend). Để AI có thể tìm trong DB (TBKT, LSX, SBB...), vui lòng khởi động .NET Backend: `cd backend\\THIHI_AI.Backend && dotnet run` (chạy tại http://localhost:5000).';
         }
         if (vectorSearchResults.length > 0) {
-          const searchInfo = this.formatSearchResultsForDisplay(vectorSearchResults);
-          aiContent += `\n\n---\n\n**📊 Kết quả tìm kiếm từ hệ thống:**\n${searchInfo}`;
+          const searchSummary = this.formatSearchResultsForDisplay(vectorSearchResults);
+          aiContent += `\n\n---\n\n${searchSummary}`;
         }
         
         const aiResponse: Message = {
@@ -1184,17 +1161,6 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
           suggestions: response.suggestions || [],
           timestamp: new Date()
         };
-
-        // Log để debug
-        if (response.suggestions && response.suggestions.length > 0) {
-          console.log('✅ Received suggestions:', response.suggestions);
-        }
-        if (response.citations && response.citations.length > 0) {
-          console.log('✅ Received citations:', response.citations);
-        }
-        if (vectorSearchResults.length > 0) {
-          console.log('✅ Including vector search results in response');
-        }
 
         this.messages.push(aiResponse);
         this.shouldScroll = true;
@@ -1386,13 +1352,33 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
   }
 
   /**
-   * Format search results cho hiển thị
+   * Format search results cho hiển thị thân thiện: tóm tắt ngắn, không dump raw dài.
+   * Xử lý nội dung rỗng hoặc lỗi Excel (#NAME?, #REF!, ...) thành placeholder thân thiện.
    */
   private formatSearchResultsForDisplay(results: SearchResult[]): string {
-    return results.map((result, index) => {
-      const similarityPercent = (result.similarity * 100).toFixed(1);
-      return `${index + 1}. **${result.content}** (Độ tương đồng: ${similarityPercent}%)`;
-    }).join('\n');
+    const n = results.length;
+    const topSimilarity = results.length > 0
+      ? (Math.max(...results.map(r => r.similarity)) * 100).toFixed(1)
+      : '0';
+    let text = `**📊 Đã tìm thấy ${n} kết quả** trong hệ thống (độ tương đồng cao nhất: ${topSimilarity}%). Nội dung trả lời dựa trên dữ liệu này.`;
+    const emptyPlaceholder = '(Không có mô tả)';
+    const isBlankOrError = (s: string | null | undefined): boolean => {
+      if (s == null || typeof s !== 'string') return true;
+      const t = s.trim().toUpperCase();
+      return t === '' || t === '#NAME?' || t === '#REF!' || t === '#VALUE!' || t === '#N/A';
+    };
+    const maxPreview = 3;
+    const maxLen = 80;
+    const previews = results.slice(0, maxPreview).map((r, i) => {
+      const raw = r?.content;
+      const display = isBlankOrError(raw) ? emptyPlaceholder : (raw!.length > maxLen ? raw!.slice(0, maxLen) + '…' : raw!);
+      const pct = (r?.similarity ?? 0) * 100;
+      return `${i + 1}. ${display} (${pct.toFixed(0)}%)`;
+    });
+    if (previews.length > 0) {
+      text += '\n\n' + previews.join('\n');
+    }
+    return text;
   }
 
   onEnterKey(event: Event): void {

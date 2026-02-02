@@ -41,8 +41,8 @@ export const environment = {
   // Hoặc dùng specific tenant ID nếu chỉ muốn 1 tenant
   microsoftTenantId: "common",
   
-  // .NET Backend API URL (Excel import, v.v.)
+  // .NET Backend API URL (Excel import, vector search, v.v.)
   backendApiUrl: "http://localhost:5000",
-  // Python Vector Search API (Chat cần service này để tìm trong DB) - port phải khớp với khi chạy python app.py (hoặc .env PORT)
-  vectorSearchApiUrl: "http://localhost:8000"
+  // Vector Search: dùng .NET Backend (cùng port 5000, endpoint /api/search/vector) — không cần chạy Python API riêng cho Chat
+  vectorSearchApiUrl: "http://localhost:5000"
 };

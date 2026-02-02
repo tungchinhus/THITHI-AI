@@ -20,9 +20,7 @@ public class VectorSearchService
         _connectionString = config.GetConnectionString("DefaultConnection") 
             ?? throw new ArgumentNullException(nameof(config), "DefaultConnection string is required");
         _httpClient = httpClient;
-        // Python API chạy port riêng (tránh trùng với Kestrel). Mặc định 5005.
         _pythonApiUrl = config["PythonApi:VectorizeUrl"] ?? "http://localhost:5005/vectorize";
-        // Embedding dimension: 768 for all-mpnet-base-v2, 384 for paraphrase-multilingual-MiniLM-L12-v2
         _embeddingDimension = config.GetValue<int>("Embedding:Dimension", 768);
         _logger = logger;
         _logger.LogInformation("VectorSearchService initialized with embedding dimension: {Dimension}", _embeddingDimension);
@@ -55,7 +53,7 @@ public class VectorSearchService
             return exactMatches;
         }
 
-        // Bước 1: Vectorize query
+        // Bước 1: Vectorize query bằng Python API
         var queryVector = await VectorizeTextAsync(query);
         if (queryVector == null || queryVector.Count == 0)
         {
@@ -185,18 +183,17 @@ public class VectorSearchService
         using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
 
-        // Use native VECTOR_DISTANCE function
+        // Use native VECTOR_DISTANCE function (SQL Server 2025: first param = distance metric string, then vector1, vector2)
         // VECTOR_DISTANCE returns distance (0 = identical), so similarity = 1 - distance
-        // Note: Dimension must match the stored embeddings (768 for all-mpnet-base-v2)
         string sql = $@"
             SELECT TOP (@topN)
                 ID,
                 Content,
-                (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})), COSINE)) AS Similarity
+                (1.0 - VECTOR_DISTANCE('cosine', Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})))) AS Similarity
             FROM dbo.[{safeTableName}]
             WHERE Embedding IS NOT NULL
-              AND (1.0 - VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})), COSINE)) >= @threshold
-            ORDER BY VECTOR_DISTANCE(Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})), COSINE) ASC";
+              AND (1.0 - VECTOR_DISTANCE('cosine', Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension})))) >= @threshold
+            ORDER BY VECTOR_DISTANCE('cosine', Embedding, CAST(@queryVector AS VECTOR({_embeddingDimension}))) ASC";
         
         _logger.LogInformation("Using VECTOR({Dimension}) for search", _embeddingDimension);
 
@@ -235,40 +232,51 @@ public class VectorSearchService
         
         foreach (var word in words)
         {
-            // Skip common words
-            if (word.Length < 3) continue;
-            
+            // Bỏ dấu câu ở đầu/cuối để trích token chính xác
+            var w = word.Trim().TrimEnd(',', '.', '?', '!', ';', ':');
+            if (string.IsNullOrEmpty(w)) continue;
+
             // Pattern 1: Date format (01/02/2021, 01-02-2021, 01.02.2021)
             var datePattern = @"\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}";
-            var dateMatch = System.Text.RegularExpressions.Regex.Match(word, datePattern);
+            var dateMatch = System.Text.RegularExpressions.Regex.Match(w, datePattern);
             if (dateMatch.Success)
             {
-                tokens.Add(word);
+                tokens.Add(w);
+                continue;
+            }
+
+            // Pattern 2: Số thuần (2+ chữ số) - cho truy vấn khoảng "200 đến 300", "Po 250"
+            if (w.Length >= 2 && w.All(char.IsDigit))
+            {
+                tokens.Add(w);
+                continue;
+            }
+
+            // Pattern 3: Từ viết tắt 2-3 chữ cái (Po, Io, Pk75...) - có thể là tên cột/số liệu
+            if (w.Length >= 2 && w.Length <= 4 && w.All(char.IsLetter))
+            {
+                tokens.Add(w);
                 continue;
             }
             
-            // Pattern 2: Code với số + chữ cái (22240T, 20113B) - ít nhất 4 ký tự
-            if (word.Length >= 4 && word.Any(char.IsDigit))
+            // Pattern 4: Code với số + chữ cái (22240T, 20113B) - ít nhất 4 ký tự
+            if (w.Length >= 4 && w.Any(char.IsDigit))
             {
-                var hasDigit = word.Any(char.IsDigit);
-                var hasLetter = word.Any(char.IsLetter);
-                
-                // Nếu có chữ cái, phải ở cuối (ví dụ: 22240T, không phải T22240)
+                var hasLetter = w.Any(char.IsLetter);
                 if (hasLetter)
                 {
-                    var lastChar = word[word.Length - 1];
+                    var lastChar = w[w.Length - 1];
                     var hasLetterAtEnd = char.IsLetter(lastChar);
-                    var digitsBefore = word.Substring(0, word.Length - 1).All(char.IsDigit);
-                    if (hasLetterAtEnd && digitsBefore && word.Length >= 5)
+                    var digitsBefore = w.Substring(0, w.Length - 1).All(char.IsDigit);
+                    if (hasLetterAtEnd && digitsBefore && w.Length >= 5)
                     {
-                        tokens.Add(word);
+                        tokens.Add(w);
                         continue;
                     }
                 }
-                // Chỉ số: ít nhất 5 chữ số
-                else if (word.Length >= 5 && word.All(char.IsDigit))
+                else if (w.Length >= 5 && w.All(char.IsDigit))
                 {
-                    tokens.Add(word);
+                    tokens.Add(w);
                     continue;
                 }
             }

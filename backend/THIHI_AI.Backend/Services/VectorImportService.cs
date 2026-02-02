@@ -15,6 +15,7 @@ public class VectorImportService
     private readonly string _pythonApiUrl;
     private readonly string _embeddingModelName; // SQL Server 2025 EXTERNAL MODEL name
     private readonly string _embeddingModelType; // "SQL_SERVER" (native) or "PYTHON_API" (fallback)
+    private readonly int _embeddingDimension; // 384 (e.g. paraphrase-multilingual-MiniLM) or 768 (e.g. all-mpnet-base-v2)
     private readonly ILogger<VectorImportService> _logger;
 
     public VectorImportService(Microsoft.Extensions.Configuration.IConfiguration config, HttpClient httpClient, ILogger<VectorImportService> logger)
@@ -25,6 +26,7 @@ public class VectorImportService
         _pythonApiUrl = config["PythonApi:VectorizeUrl"] ?? "http://localhost:5005/vectorize";
         _embeddingModelName = config["Embedding:ModelName"] ?? "azure_openai_embeddings";
         _embeddingModelType = config["Embedding:Type"] ?? "SQL_SERVER"; // "SQL_SERVER" or "PYTHON_API"
+        _embeddingDimension = config.GetValue<int>("Embedding:Dimension", 384);
         _logger = logger;
     }
 
@@ -669,7 +671,7 @@ public class VectorImportService
                         ID INT IDENTITY(1,1) PRIMARY KEY,
                         Content NVARCHAR(MAX),
                         VectorJson NVARCHAR(MAX) NULL, -- Backward compatibility
-                        Embedding VECTOR(384) NULL -- Native VECTOR type (adjust dimension as needed)
+                        Embedding VECTOR({_embeddingDimension}) NULL -- Native VECTOR type (from Embedding:Dimension)
                     );
                     
                     -- Vector index will be created manually after import if needed
@@ -766,7 +768,7 @@ public class VectorImportService
         string columnsSql = string.Join(", ", allColumnNames.Select(c => $"[{c}]"));
         // For VECTOR column, use CAST to convert string to VECTOR type
         string valuesSql = string.Join(", ", allColumnNames.Select(c => 
-            c == "Embedding" ? "CAST(@Embedding AS VECTOR(384))" : $"@{c}"));
+            c == "Embedding" ? $"CAST(@Embedding AS VECTOR({_embeddingDimension}))" : $"@{c}"));
         string insertSqlTemplate = $"INSERT INTO dbo.[{safeTableName}] ({columnsSql}) VALUES ({valuesSql})";
 
         // 3.2. Insert dữ liệu (Dùng Transaction cho an toàn)
@@ -1137,7 +1139,7 @@ public class VectorImportService
                         string updateSql = $@"
                             UPDATE dbo.[{safeTableName}]
                             SET VectorJson = @VectorJson,
-                                Embedding = CASE WHEN @Embedding IS NOT NULL THEN CAST(@Embedding AS VECTOR(384)) ELSE NULL END
+                                Embedding = CASE WHEN @Embedding IS NOT NULL THEN CAST(@Embedding AS VECTOR({_embeddingDimension})) ELSE NULL END
                             WHERE ID = @Id";
 
                         using var cmd = new SqlCommand(updateSql, conn, transaction);
