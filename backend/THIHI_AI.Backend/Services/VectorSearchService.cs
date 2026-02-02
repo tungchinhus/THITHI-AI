@@ -9,6 +9,8 @@ public class VectorSearchService
     private readonly string _connectionString;
     private readonly HttpClient _httpClient;
     private readonly string _pythonApiUrl;
+    private readonly string _embeddingModelType; // "SQL_SERVER" hoặc "PYTHON_API"
+    private readonly string _embeddingModelName; // Tên EXTERNAL MODEL trong SQL Server khi Type = SQL_SERVER
     private readonly int _embeddingDimension;
     private readonly ILogger<VectorSearchService> _logger;
 
@@ -21,9 +23,11 @@ public class VectorSearchService
             ?? throw new ArgumentNullException(nameof(config), "DefaultConnection string is required");
         _httpClient = httpClient;
         _pythonApiUrl = config["PythonApi:VectorizeUrl"] ?? "http://localhost:5005/vectorize";
+        _embeddingModelType = config["Embedding:Type"] ?? "PYTHON_API";
+        _embeddingModelName = config["Embedding:ModelName"] ?? "azure_openai_embeddings";
         _embeddingDimension = config.GetValue<int>("Embedding:Dimension", 768);
         _logger = logger;
-        _logger.LogInformation("VectorSearchService initialized with embedding dimension: {Dimension}", _embeddingDimension);
+        _logger.LogInformation("VectorSearchService: Embedding={Type}, Dimension={Dimension}", _embeddingModelType, _embeddingDimension);
     }
 
     /// <summary>
@@ -53,8 +57,8 @@ public class VectorSearchService
             return exactMatches;
         }
 
-        // Bước 1: Vectorize query bằng Python API
-        var queryVector = await VectorizeTextAsync(query);
+        // Bước 1: Vectorize query (SQL Server 2025 native hoặc Python API)
+        var queryVector = await VectorizeQueryAsync(query);
         if (queryVector == null || queryVector.Count == 0)
         {
             _logger.LogWarning("Không thể vectorize query");
@@ -366,6 +370,84 @@ public class VectorSearchService
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Vectorize câu hỏi: dùng SQL Server 2025 (nếu Type=SQL_SERVER) hoặc Python API.
+    /// </summary>
+    private async Task<List<float>> VectorizeQueryAsync(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return new List<float>();
+
+        if (_embeddingModelType.Equals("SQL_SERVER", StringComparison.OrdinalIgnoreCase))
+        {
+            var vec = await VectorizeTextViaSqlServerAsync(text);
+            return vec ?? new List<float>();
+        }
+        return await VectorizeTextAsync(text);
+    }
+
+    /// <summary>
+    /// Vectorize text bằng SQL Server 2025 AI_GENERATE_EMBEDDINGS (không cần Python API).
+    /// Cần có EXTERNAL MODEL trong SQL Server (xem HUONG_DAN_SQL_SERVER_2025_EMBEDDINGS.md).
+    /// </summary>
+    private async Task<List<float>?> VectorizeTextViaSqlServerAsync(string text)
+    {
+        if (string.IsNullOrWhiteSpace(_embeddingModelName))
+        {
+            _logger.LogWarning("Embedding:ModelName chưa cấu hình");
+            return null;
+        }
+
+        try
+        {
+            using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var safeModelName = new string(_embeddingModelName.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+            if (string.IsNullOrWhiteSpace(safeModelName))
+                return null;
+
+            string sql = $"SELECT CONVERT(NVARCHAR(MAX), AI_GENERATE_EMBEDDINGS(@Text USE MODEL [{safeModelName}])) AS EmbeddingJson";
+            using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@Text", text ?? string.Empty);
+
+            var obj = await cmd.ExecuteScalarAsync();
+            if (obj == null || obj == DBNull.Value)
+                return null;
+
+            var jsonString = obj.ToString();
+            if (string.IsNullOrWhiteSpace(jsonString))
+                return null;
+
+            return ParseVectorFromJson(jsonString);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Lỗi vectorize query bằng SQL Server. Kiểm tra EXTERNAL MODEL [{Model}].", _embeddingModelName);
+            return null;
+        }
+    }
+
+    private static List<float>? ParseVectorFromJson(string jsonString)
+    {
+        if (string.IsNullOrWhiteSpace(jsonString)) return null;
+        try
+        {
+            var cleaned = jsonString.Trim().TrimStart('[').TrimEnd(']');
+            if (string.IsNullOrWhiteSpace(cleaned)) return null;
+            var parts = cleaned.Split(',');
+            var list = new List<float>();
+            foreach (var part in parts)
+            {
+                if (float.TryParse(part.Trim(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out float v))
+                    list.Add(v);
+            }
+            return list.Count > 0 ? list : null;
+        }
+        catch { return null; }
     }
 
     /// <summary>

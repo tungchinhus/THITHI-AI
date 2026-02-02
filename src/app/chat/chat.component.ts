@@ -1088,11 +1088,11 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
     
     if (isDataQuery) {
       // Perform vector search first
-      // For count queries, use higher topN to get all matches
+      // Số kết quả trả về: câu đếm (có bao nhiêu) lấy nhiều để đếm đủ; câu tìm/liệt kê lấy đủ để hiển thị (vd 13, 50...)
       const isCountQuery = finalMessage.toLowerCase().includes('có bao nhiêu') || 
                           finalMessage.toLowerCase().includes('how many') ||
                           finalMessage.toLowerCase().includes('count');
-      const topN = isCountQuery ? 1000 : 5;
+      const topN = isCountQuery ? 1000 : 100;
       this.vectorSearchService.search(finalMessage, 'TSMay', topN, 0.3).subscribe({
         next: (searchResponse) => {
           if (searchResponse.results && searchResponse.results.length > 0) {
