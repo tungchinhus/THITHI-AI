@@ -1,5 +1,17 @@
 # Hướng Dẫn Tìm Kiếm Thông Minh với Vector Search
 
+## ⚠️ Chat cần Python API chạy
+
+**Để AI trả lời dựa trên dữ liệu trong DB (TBKT, LSX, SBB...)** bạn cần khởi động **Python API** (Vector Search) trước:
+
+- **URL:** `http://localhost:5005`
+- **Cách chạy:** Trong thư mục `THITHI_python-api`: `python app.py`
+- Nếu không chạy Python API, chat vẫn hoạt động nhưng **không tìm được trong DB** và sẽ báo "Không kết nối được dịch vụ tìm kiếm dữ liệu".
+
+Chi tiết: xem `THITHI_python-api/README_START.md`.
+
+---
+
 ## 📋 Tổng Quan
 
 Hệ thống tìm kiếm thông minh sử dụng **Vector Embeddings** và **Cosine Similarity** để tìm kiếm dữ liệu dựa trên ý nghĩa (semantic search) thay vì chỉ tìm kiếm từ khóa chính xác.
@@ -19,9 +31,7 @@ User Query
     ↓
 Angular Frontend
     ↓
-.NET Backend API (/api/search/vector)
-    ↓
-Python API (Vectorize query)
+Python API http://localhost:5005 (/api/search/vector)
     ↓
 SQL Server (Load all vectors)
     ↓

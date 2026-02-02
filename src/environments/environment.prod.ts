@@ -43,6 +43,8 @@ export const environment = {
   microsoftTenantId: "YOUR_MICROSOFT_TENANT_ID",
   
   // .NET Backend API URL
-  backendApiUrl: "http://localhost:5000"
+  backendApiUrl: "http://localhost:5000",
+  // Python Vector Search API - port phải khớp với python app.py (hoặc .env PORT)
+  vectorSearchApiUrl: "http://localhost:8000"
 };
 

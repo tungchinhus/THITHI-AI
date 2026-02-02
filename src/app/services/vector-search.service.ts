@@ -22,13 +22,15 @@ export interface SearchResponse {
   tableName: string;
   totalResults: number;
   results: SearchResult[];
+  /** True khi không kết nối được API (ví dụ Python API chưa chạy) */
+  connectionError?: boolean;
 }
 
 @Injectable({
   providedIn: 'root'
 })
 export class VectorSearchService {
-  private apiUrl = environment.backendApiUrl || 'http://localhost:5000';
+  private apiUrl = (environment as any).vectorSearchApiUrl || environment.backendApiUrl || 'http://localhost:8000';
 
   constructor(private http: HttpClient) {}
 
@@ -51,36 +53,40 @@ export class VectorSearchService {
       topN,
       similarityThreshold
     };
+    const fullUrl = `${this.apiUrl}/api/search/vector`;
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vector-search.service.ts:search',message:'Vector search request',data:{apiUrl:this.apiUrl,fullUrl,query,tableName},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
+    // #endregion
 
     // Timeout: 10 giây, retry: 1 lần
     return this.http.post<SearchResponse>(
-      `${this.apiUrl}/api/search/vector`,
+      fullUrl,
       request
     ).pipe(
       timeout(10000), // 10 giây timeout
       retry(1), // Retry 1 lần nếu fail
-      catchError((error: HttpErrorResponse) => {
+        catchError((error: HttpErrorResponse) => {
         console.error('Vector search error:', error);
-        
-        // Nếu lỗi, trả về empty response thay vì throw error
-        // Để chat vẫn có thể tiếp tục hoạt động bình thường
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vector-search.service.ts:catchError',message:'Vector search error response',data:{status:error.status,statusText:error.statusText,url:error.url,ok:error.ok},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+        // #endregion
+        const isConnectionRefused = error.status === 0;
         const emptyResponse: SearchResponse = {
           query,
           tableName,
           totalResults: 0,
-          results: []
+          results: [],
+          connectionError: isConnectionRefused
         };
         
-        // Log warning nhưng không block chat
-        if (error.status === 0) {
-          console.warn('⚠️ Vector search: Không thể kết nối đến backend API. Chat sẽ tiếp tục không có vector search.');
+        if (isConnectionRefused) {
+          console.warn('⚠️ Vector search: Không thể kết nối đến Python API (' + this.apiUrl + '). Khởi động: cd THITHI_python-api && python app.py');
         } else if (error.status === 500) {
           console.warn('⚠️ Vector search: Lỗi server (500). Chat sẽ tiếp tục không có vector search.');
         } else {
           console.warn(`⚠️ Vector search: Lỗi ${error.status}. Chat sẽ tiếp tục không có vector search.`);
         }
         
-        // Trả về empty response để chat có thể tiếp tục
         return of(emptyResponse);
       })
     );

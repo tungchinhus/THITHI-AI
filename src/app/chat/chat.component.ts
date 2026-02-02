@@ -1101,6 +1101,9 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
     
     if (isDataQuery) {
       console.log('🔍 Detected data query, performing vector search...');
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:sendMessage',message:'Data query branch',data:{finalMessage:finalMessage.substring(0,80),isDataQuery:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
+      // #endregion
       // Perform vector search first
       // For count queries, use higher topN to get all matches
       const isCountQuery = finalMessage.toLowerCase().includes('có bao nhiêu') || 
@@ -1109,6 +1112,9 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
       const topN = isCountQuery ? 1000 : 5;
       this.vectorSearchService.search(finalMessage, 'TSMay', topN, 0.3).subscribe({
         next: (searchResponse) => {
+          // #region agent log
+          fetch('http://127.0.0.1:7244/ingest/44a5992a-d7e5-4a51-ab74-f07a3f705c9f',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'chat.component.ts:searchResponse',message:'Vector search response received',data:{resultsCount:searchResponse.results?.length??0,connectionError:!!(searchResponse as any).connectionError},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+          // #endregion
           if (searchResponse.results && searchResponse.results.length > 0) {
             vectorSearchResults = searchResponse.results;
             console.log(`✅ Found ${searchResponse.results.length} results from vector search`);
@@ -1125,18 +1131,16 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
             enhancedMessage = `${finalMessage}${instruction}[Dữ liệu tìm được từ hệ thống (TỔNG CỘNG ${searchResponse.results.length} kết quả):\n${searchContext}]`;
             
             // Continue with enhanced message (use finalMessage which may have inferred context)
-            this.sendMessageWithContext(enhancedMessage, validToken, chatHistory, userInfo, vectorSearchResults);
+            this.sendMessageWithContext(enhancedMessage, validToken, chatHistory, userInfo, vectorSearchResults, false);
           } else {
             console.log('⚠️ No results from vector search, proceeding with original message');
-            // No results, proceed with original message (use finalMessage for context, but original for display)
-            this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, []);
+            const connectionError = !!(searchResponse as any).connectionError;
+            this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, [], connectionError);
           }
         },
         error: (error) => {
           console.warn('⚠️ Vector search failed, continuing without vector search:', error);
-          // If search fails, proceed with original message (vector search is optional)
-          // Chat will continue normally without vector search results
-          this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, []);
+          this.sendMessageWithContext(finalMessage, validToken, chatHistory, userInfo, [], true);
         }
       });
       return; // Exit early, sendMessageWithContext will handle the rest
@@ -1148,23 +1152,25 @@ export class ChatComponent implements OnInit, AfterViewChecked, OnDestroy {
 
   /**
    * Send message with vector search context
+   * @param vectorSearchConnectionError true khi không kết nối được Python API
    */
   private sendMessageWithContext(
     message: string,
     validToken: string | undefined,
     chatHistory: any[],
     userInfo: any,
-    vectorSearchResults: SearchResult[]
+    vectorSearchResults: SearchResult[],
+    vectorSearchConnectionError?: boolean
   ): void {
     this.chatService.sendMessage(message, validToken, chatHistory, userInfo).subscribe({
       next: (response) => {
         this.isLoading = false;
         
-        // Parse response - Backend đã parse JSON, nhưng đảm bảo xử lý đúng
-        // Backend trả về: { answer, citations, suggestions, analysis, sources }
         let aiContent = response.answer || response.content || response.message || 'Không có phản hồi';
         
-        // If we have vector search results, enhance the response
+        if (vectorSearchConnectionError) {
+          aiContent += '\n\n---\n\n**⚠️ Lưu ý:** Không kết nối được dịch vụ tìm kiếm dữ liệu (Python API). Để AI có thể tìm trong DB (TBKT, LSX, SBB...), vui lòng khởi động Python API: `cd THITHI_python-api && python app.py` (port theo .env PORT hoặc mặc định 5005).';
+        }
         if (vectorSearchResults.length > 0) {
           const searchInfo = this.formatSearchResultsForDisplay(vectorSearchResults);
           aiContent += `\n\n---\n\n**📊 Kết quả tìm kiếm từ hệ thống:**\n${searchInfo}`;
