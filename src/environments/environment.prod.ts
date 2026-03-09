@@ -42,9 +42,9 @@ export const environment = {
   microsoftClientId: "YOUR_MICROSOFT_CLIENT_ID",
   microsoftTenantId: "YOUR_MICROSOFT_TENANT_ID",
   
-  // .NET Backend API URL
+  // .NET Backend API URL (Excel import, vector search: /api/search/vector)
   backendApiUrl: "http://localhost:5000",
-  // Python Vector Search API - port phải khớp với python app.py (hoặc .env PORT)
-  vectorSearchApiUrl: "http://localhost:8000"
+  // Vector Search: dùng .NET Backend (cùng port 5000)
+  vectorSearchApiUrl: "http://localhost:5000"
 };
 

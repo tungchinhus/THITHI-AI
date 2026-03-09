@@ -30,7 +30,7 @@ export interface SearchResponse {
   providedIn: 'root'
 })
 export class VectorSearchService {
-  private apiUrl = (environment as any).vectorSearchApiUrl || environment.backendApiUrl || 'http://localhost:8000';
+  private apiUrl = (environment as any).vectorSearchApiUrl || environment.backendApiUrl || 'http://localhost:5000';
 
   constructor(private http: HttpClient) {}
 
